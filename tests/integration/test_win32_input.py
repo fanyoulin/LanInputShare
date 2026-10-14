@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import subprocess
 import sys
 import time
@@ -49,6 +50,28 @@ Win32InputInjector().inject(
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_right_shift_normalizes_an_erroneous_extended_key_flag() -> None:
+    injector = Win32InputInjector()
+    right_shift = KeyEvent(
+        scan_code=0x36,
+        virtual_key=0xA1,
+        is_down=True,
+        is_extended=True,
+    )
+    injector.inject(
+        KeyEvent(scan_code=0x36, virtual_key=0xA1, is_down=False)
+    )
+    try:
+        injector.inject(right_shift)
+        time.sleep(0.03)
+
+        assert ctypes.windll.user32.GetAsyncKeyState(0xA1) & 0x8000
+    finally:
+        injector.inject(
+            KeyEvent(scan_code=0x36, virtual_key=0xA1, is_down=False)
+        )
 
 
 def test_native_hook_filters_injected_input_and_uninstalls_cleanly() -> None:

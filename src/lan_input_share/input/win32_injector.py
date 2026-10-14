@@ -37,6 +37,8 @@ _SM_CXVIRTUALSCREEN = 78
 _SM_CYVIRTUALSCREEN = 79
 _XBUTTON1 = 0x0001
 _XBUTTON2 = 0x0002
+_VK_RSHIFT = 0xA1
+_RIGHT_SHIFT_SCAN_CODE = 0x36
 
 _ULONG_PTR = wintypes.WPARAM
 
@@ -103,7 +105,10 @@ class Win32InputInjector:
     def _translate(self, event: InputEvent) -> _INPUT:
         if isinstance(event, KeyEvent):
             flags = _KEYEVENTF_SCANCODE if event.scan_code else 0
-            if event.is_extended:
+            if event.is_extended and not (
+                event.virtual_key == _VK_RSHIFT
+                or event.scan_code == _RIGHT_SHIFT_SCAN_CODE
+            ):
                 flags |= _KEYEVENTF_EXTENDEDKEY
             if not event.is_down:
                 flags |= _KEYEVENTF_KEYUP
