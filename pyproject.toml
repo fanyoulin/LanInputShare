@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lan-input-share"
+version = "0.1.0"
+description = "Private Windows LAN keyboard, mouse, and clipboard sharing"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "cryptography>=44,<46",
+    "psutil>=6,<8",
+    "PySide6>=6.8,<7",
+    "pywin32>=308; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.14,<2",
+    "pip-tools>=7.4,<8",
+    "pyinstaller>=6.11,<7",
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=0.25,<2",
+    "pytest-qt>=4.4,<5",
+    "ruff>=0.9,<1",
+    "types-psutil>=7,<8",
+]
+
+[project.scripts]
+lan-input-share = "lan_input_share.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "windows_integration: tests that exercise real Windows APIs",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["lan_input_share"]

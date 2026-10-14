@@ -1,0 +1,1 @@
+"""Reversible Windows integration helpers."""
