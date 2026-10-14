@@ -241,15 +241,19 @@ class CrossLayoutEditor(QWidget):
 
     def _refresh(self) -> None:
         for position, button in self._buttons.items():
-            lines = [_POSITION_LABELS[position]]
             if position is self._local_position:
+                lines = [_POSITION_LABELS[position]]
                 lines.append("本机")
             elif position in self._peers:
-                lines.append(self._peers[position][0])
                 details = self._slot_details.get(position)
-                if details is not None:
+                if details is None:
+                    lines = [_POSITION_LABELS[position], self._peers[position][0]]
+                else:
+                    lines = [self._peers[position][0]]
                     status = _STATUS_LABELS.get(details[1], details[1])
                     lines.append(f"{details[0]} · {status}")
+            else:
+                lines = [_POSITION_LABELS[position]]
             button.setText("\n".join(lines))
 
 

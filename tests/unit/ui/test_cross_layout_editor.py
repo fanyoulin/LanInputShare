@@ -100,3 +100,16 @@ def test_connection_statuses_are_displayed_in_clear_chinese(qtbot) -> None:  # t
 
     editor.set_slot_status(ScreenPosition.LEFT, "", "busy")
     assert "客户端使用中" in editor.slot_button(ScreenPosition.LEFT).text()
+
+
+def test_connected_peer_slot_hides_position_label_to_fit_two_lines(qtbot) -> None:  # type: ignore[no-untyped-def]
+    editor = CrossLayoutEditor()
+    qtbot.addWidget(editor)
+    editor.set_peer(ScreenPosition.LEFT, "192.168.110.157", 24870)
+
+    editor.set_slot_status(ScreenPosition.LEFT, "Client", "connected")
+
+    assert editor.slot_button(ScreenPosition.LEFT).text().splitlines() == [
+        "192.168.110.157",
+        "Client · 已连接",
+    ]
