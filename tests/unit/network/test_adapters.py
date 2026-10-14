@@ -2,6 +2,7 @@ import socket
 
 import pytest
 
+import lan_input_share.network.adapters as adapters_module
 from lan_input_share.network.adapters import (
     AdapterInfo,
     AdapterKind,
@@ -60,3 +61,28 @@ def test_bind_socket_uses_adapter_ipv4():
         assert sock.getsockname()[0] == "127.0.0.1"
     finally:
         sock.close()
+
+
+def test_selected_ipv4_matches_the_primary_physical_adapter_used_for_binding():
+    tun = _adapter("Clash", "198.18.0.1", metric=1)
+    wifi = _adapter("Wi-Fi", "192.168.31.129", metric=20)
+    ethernet = _adapter("Ethernet", "192.168.31.88", metric=10, index=5)
+
+    assert adapters_module.selected_ipv4([tun, wifi, ethernet], None) == (
+        "192.168.31.88"
+    )
+
+
+def test_selected_ipv4_returns_none_when_no_physical_lan_adapter_is_available():
+    tun = _adapter("Clash", "198.18.0.1", metric=1)
+
+    assert adapters_module.selected_ipv4([tun], None) is None
+
+
+def test_selected_ipv4_honors_a_manually_selected_adapter():
+    wifi = _adapter("Wi-Fi", "192.168.31.129", metric=20)
+    ethernet = _adapter("Ethernet", "192.168.31.88", metric=10, index=5)
+
+    assert adapters_module.selected_ipv4([wifi, ethernet], "Wi-Fi") == (
+        "192.168.31.129"
+    )

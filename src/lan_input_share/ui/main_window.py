@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from lan_input_share.core.models import DeviceRole
+from lan_input_share.network.adapters import list_adapters, selected_ipv4
 from lan_input_share.ui.close_behavior import CloseChoice, ask_close_choice
 from lan_input_share.ui.cross_layout_editor import CrossLayoutEditor
 from lan_input_share.ui.resources import application_icon
@@ -73,11 +74,17 @@ class MainWindow(QMainWindow):
 
         self.client_settings_box = QGroupBox("客户端监听")
         client_layout = QFormLayout(self.client_settings_box)
+        self.client_ip_label = QLabel()
+        self.client_ip_label.setObjectName("clientLanIpLabel")
+        self.client_ip_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         self.client_port_label = QLabel("24870")
         self.bound_controller_label = QLabel(
             "已信任主控可自动连接；新主控首次连接时将在本机确认"
         )
         self.bound_controller_label.setWordWrap(True)
+        client_layout.addRow("本机局域网 IP", self.client_ip_label)
         client_layout.addRow("监听端口", self.client_port_label)
         client_layout.addRow("连接确认", self.bound_controller_label)
         layout.addWidget(self.client_settings_box)
@@ -115,7 +122,7 @@ class MainWindow(QMainWindow):
         self.name_edit.textChanged.connect(view_model.set_device_name)
         self.role_combo.currentIndexChanged.connect(self._role_changed)
         self.adapter_combo.currentIndexChanged.connect(self._adapter_changed)
-        self.adapter_combo.editTextChanged.connect(view_model.set_adapter)
+        self.adapter_combo.editTextChanged.connect(self._adapter_text_changed)
         self.cross_editor.layout_changed.connect(self._cross_layout_changed)
         self.cross_editor.peer_moved.connect(view_model.apply_layout_immediately)
         self.cross_editor.validation_failed.connect(
@@ -131,6 +138,7 @@ class MainWindow(QMainWindow):
         view_model.pairing_requested.connect(self._show_pairing)
         view_model.slot_status_changed.connect(self._update_slot)
         self._update_role_panels(view_model.role)
+        self._refresh_client_ip()
 
     def restore(self) -> None:
         self.showNormal()
@@ -172,10 +180,26 @@ class MainWindow(QMainWindow):
             role = None
         self._view_model.set_role(role)
         self._update_role_panels(role)
+        self._refresh_client_ip()
 
     def _adapter_changed(self, index: int) -> None:
         value = self.adapter_combo.itemData(index)
         self._view_model.set_adapter(str(value or self.adapter_combo.currentText()))
+        self._refresh_client_ip()
+
+    def _adapter_text_changed(self, text: str) -> None:
+        index = self.adapter_combo.currentIndex()
+        if index < 0 or self.adapter_combo.itemText(index) != text:
+            self._view_model.set_adapter(text)
+        self._refresh_client_ip()
+
+    def _refresh_client_ip(self) -> None:
+        adapter_id = self._view_model.adapter_id
+        manual_id = None if adapter_id in {"", "auto"} else adapter_id
+        address = selected_ipv4(list_adapters(), manual_id)
+        self.client_ip_label.setText(
+            address or "未检测到可用的局域网 IP"
+        )
 
     def _cross_layout_changed(self) -> None:
         try:

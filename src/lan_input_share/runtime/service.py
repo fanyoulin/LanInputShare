@@ -41,7 +41,7 @@ from lan_input_share.input.win32_cursor import Win32CursorController
 from lan_input_share.input.win32_hook import Win32InputHook
 from lan_input_share.input.win32_injector import Win32InputInjector
 from lan_input_share.logging_setup import sanitize_transfer_error
-from lan_input_share.network.adapters import choose_adapters, list_adapters
+from lan_input_share.network.adapters import list_adapters, selected_ipv4
 from lan_input_share.network.backoff import ExponentialBackoff
 from lan_input_share.network.connection import (
     SessionCallbacks,
@@ -2005,8 +2005,7 @@ def _primary_screen() -> ScreenInfo:
 def _selected_bind_ip(config: AppConfig) -> str | None:
     if config.bind_ip:
         return config.bind_ip
-    selected = choose_adapters(list_adapters(), config.adapter_id)
-    return selected[0].ipv4 if selected else None
+    return selected_ipv4(list_adapters(), config.adapter_id)
 
 
 def _item_from_marker(marker: str, text: str) -> ClipboardItem | None:

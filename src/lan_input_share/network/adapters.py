@@ -76,6 +76,13 @@ def choose_adapters(
     return tuple(sorted(physical, key=lambda adapter: (adapter.metric, adapter.name.lower())))
 
 
+def selected_ipv4(
+    adapters: list[AdapterInfo] | tuple[AdapterInfo, ...], manual_id: str | None
+) -> str | None:
+    selected = choose_adapters(adapters, manual_id)
+    return selected[0].ipv4 if selected else None
+
+
 def list_adapters() -> tuple[AdapterInfo, ...]:
     addresses = psutil.net_if_addrs()
     stats = psutil.net_if_stats()

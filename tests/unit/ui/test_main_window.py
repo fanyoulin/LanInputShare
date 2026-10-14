@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGroupBox, QMessageBox, QPushButton
 
 from lan_input_share.core.models import DeviceRole, ScreenPosition
+from lan_input_share.network.adapters import AdapterInfo
 from lan_input_share.ui.close_behavior import CloseChoice, build_close_dialog
 from lan_input_share.ui.cross_layout_editor import CrossLayoutEditor
 from lan_input_share.ui.main_window import MainWindow
@@ -104,6 +106,59 @@ def test_controller_shows_cross_editor_and_client_hides_position_fields(qtbot) -
     assert not window.cross_editor.isVisible()
     assert window.client_settings_box.isVisible()
     assert window.findChild(CrossLayoutEditor, "crossLayoutEditor") is not None
+
+
+def test_client_panel_shows_the_selected_physical_lan_ip(
+    qtbot, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    adapters = (
+        AdapterInfo("Clash", "Clash", 1, "198.18.0.1", True, 1),
+        AdapterInfo("Wi-Fi", "Wi-Fi", 9, "192.168.31.129", True, 9),
+        AdapterInfo("Ethernet", "Ethernet", 5, "192.168.31.88", True, 5),
+    )
+    monkeypatch.setattr(
+        "lan_input_share.ui.main_window.list_adapters",
+        lambda: adapters,
+        raising=False,
+    )
+    window = MainWindow(AppViewModel(FakeRuntime()))
+    qtbot.addWidget(window)
+    window.show()
+
+    window.role_combo.setCurrentIndex(window.role_combo.findData(DeviceRole.CLIENT))
+    window.adapter_combo.setCurrentIndex(window.adapter_combo.findData("auto"))
+
+    assert window.client_ip_label.text() == "192.168.31.88"
+    assert window.client_ip_label.textInteractionFlags() & (
+        Qt.TextInteractionFlag.TextSelectableByMouse
+    )
+    assert window.client_ip_label.isVisible()
+
+    window.adapter_combo.setEditText("Wi-Fi")
+    assert window.client_ip_label.text() == "192.168.31.129"
+
+    window.role_combo.setCurrentIndex(window.role_combo.findData(DeviceRole.CONTROLLER))
+    assert not window.client_ip_label.isVisible()
+
+
+def test_client_panel_explains_when_no_physical_lan_ip_is_available(
+    qtbot, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    adapters = (
+        AdapterInfo("Clash", "Clash", 1, "198.18.0.1", True, 1),
+    )
+    monkeypatch.setattr(
+        "lan_input_share.ui.main_window.list_adapters",
+        lambda: adapters,
+        raising=False,
+    )
+    window = MainWindow(AppViewModel(FakeRuntime()))
+    qtbot.addWidget(window)
+
+    window.role_combo.setCurrentIndex(window.role_combo.findData(DeviceRole.CLIENT))
+    window.adapter_combo.setCurrentIndex(window.adapter_combo.findData("auto"))
+
+    assert window.client_ip_label.text() == "未检测到可用的局域网 IP"
 
 
 def test_moving_connected_peer_applies_layout_without_global_save(qtbot) -> None:  # type: ignore[no-untyped-def]
