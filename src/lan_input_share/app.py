@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import CancelledError, Future
 from contextlib import suppress
 from dataclasses import asdict, replace
+from pathlib import Path
 from typing import Protocol
 
 from lan_input_share import __version__
@@ -27,6 +28,11 @@ from lan_input_share.security.pairing import PairingRequest
 from lan_input_share.transfer.preflight import PasteDecision
 from lan_input_share.transfer.status import FileTransferStatus
 from lan_input_share.ui.close_behavior import CloseChoice, ClosePreference
+from lan_input_share.windows.input_helper_install import (
+    INPUT_HELPER_EXE_NAME,
+    InputHelperManager,
+)
+from lan_input_share.windows.privilege import is_elevated
 
 _ERROR_ALREADY_EXISTS = 183
 _WINDOW_TITLE = "局域网键鼠共享"
@@ -341,13 +347,63 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--diagnose", action="store_true", help="输出只读诊断并退出")
     parser.add_argument("--minimized", action="store_true", help="仅显示托盘图标")
     parser.add_argument("--gui-smoke-test", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--install-input-helper", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--remove-input-helper", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--input-helper-status", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args(list(argv) if argv is not None else None)
+    maintenance = sum(
+        bool(value)
+        for value in (
+            arguments.install_input_helper,
+            arguments.remove_input_helper,
+            arguments.input_helper_status,
+        )
+    )
+    if maintenance > 1:
+        parser.error("input-helper maintenance options are mutually exclusive")
+    if maintenance:
+        return _run_input_helper_maintenance(arguments)
     if arguments.diagnose:
         print(json.dumps(diagnose(), ensure_ascii=False, indent=2))
         return 0
     if arguments.gui_smoke_test:
         return _run_gui_smoke_test()
     return _run_gui(minimized=bool(arguments.minimized))
+
+
+def _current_executable() -> Path:
+    executable = sys.executable if getattr(sys, "frozen", False) else sys.argv[0]
+    return Path(executable).resolve()
+
+
+def _run_input_helper_maintenance(arguments: argparse.Namespace) -> int:
+    main_exe = _current_executable()
+    helper_source = main_exe.with_name(INPUT_HELPER_EXE_NAME)
+    manager = InputHelperManager()
+    if arguments.input_helper_status:
+        status = manager.status(main_exe, helper_source)
+        print(
+            json.dumps(
+                {
+                    "state": status.state.value,
+                    "installed_path": (
+                        str(status.installed_path) if status.installed_path else None
+                    ),
+                    "detail": status.detail,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    if not is_elevated():
+        print("安装或移除高权限输入助手需要管理员权限", file=sys.stderr)
+        return 2
+    if arguments.install_input_helper:
+        manager.install(main_exe, helper_source)
+        manager.start()
+    else:
+        manager.remove()
+    return 0
 
 
 def _run_gui_smoke_test() -> int:

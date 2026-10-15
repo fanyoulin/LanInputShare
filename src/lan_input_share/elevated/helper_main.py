@@ -17,7 +17,8 @@ from lan_input_share.windows.process_identity import (
     inspect_process_identity,
 )
 
-_MANIFEST_FIELDS = {"path", "sha256", "user_sid", "protocol_version"}
+_CLIENT_FIELDS = {"path", "sha256", "user_sid", "protocol_version"}
+_INSTALL_FIELDS = _CLIENT_FIELDS | {"helper_sha256", "helper_protocol_version"}
 _SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _SID_PATTERN = re.compile(r"^S-(?:\d+-)+\d+$", re.IGNORECASE)
 
@@ -27,7 +28,10 @@ def load_approved_client(path: Path) -> ApprovedClient:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"approved-client manifest 无法读取：{exc}") from exc
-    if not isinstance(value, dict) or set(value) != _MANIFEST_FIELDS:
+    if not isinstance(value, dict) or frozenset(value) not in {
+        frozenset(_CLIENT_FIELDS),
+        frozenset(_INSTALL_FIELDS),
+    }:
         raise ValueError("approved-client manifest 字段无效")
     mapping = cast(dict[str, object], value)
     client_path = mapping["path"]

@@ -20,6 +20,14 @@ def relaunch_elevated(argv: Sequence[str]) -> None:
     _shell_execute_elevated(executable, parameters)
 
 
+def request_helper_install(executable: str) -> None:
+    relaunch_elevated((executable, "--install-input-helper"))
+
+
+def request_helper_remove(executable: str) -> None:
+    relaunch_elevated((executable, "--remove-input-helper"))
+
+
 def _shell_execute_elevated(executable: str, parameters: str) -> None:
     result = ctypes.windll.shell32.ShellExecuteW(
         None,
@@ -33,4 +41,9 @@ def _shell_execute_elevated(executable: str, parameters: str) -> None:
         raise ctypes.WinError(result)
 
 
-__all__ = ["is_elevated", "relaunch_elevated"]
+__all__ = [
+    "is_elevated",
+    "relaunch_elevated",
+    "request_helper_install",
+    "request_helper_remove",
+]
