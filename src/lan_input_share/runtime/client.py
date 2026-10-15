@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Protocol
 
+from lan_input_share.input.codec import decode_input_event
 from lan_input_share.input.events import InputEvent
 from lan_input_share.input.key_state import PressedInputState
 from lan_input_share.network.session import (
@@ -13,7 +14,6 @@ from lan_input_share.network.session import (
     SessionEvent,
 )
 from lan_input_share.protocol.messages import InputMessage, ReleaseInputMessage, WireMessage
-from lan_input_share.runtime.controller import decode_input_event
 
 
 class ClientSession(Protocol):
