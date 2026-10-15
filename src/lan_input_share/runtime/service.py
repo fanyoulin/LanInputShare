@@ -6,6 +6,7 @@ import ctypes
 import logging
 import shutil
 import ssl
+import sys
 import time
 import uuid
 import zlib
@@ -36,7 +37,14 @@ from lan_input_share.core.models import (
     ScreenInfo,
     ScreenPosition,
 )
-from lan_input_share.input.events import KeyEvent
+from lan_input_share.elevated.client import HelperInputBridge
+from lan_input_share.elevated.helper_main import load_approved_client
+from lan_input_share.elevated.models import HelperState, HelperStatus
+from lan_input_share.input.events import InputEvent, KeyEvent
+from lan_input_share.input.routed_injector import (
+    RoutedInputInjector,
+    StaticHelperInput,
+)
 from lan_input_share.input.win32_cursor import Win32CursorController
 from lan_input_share.input.win32_hook import Win32InputHook
 from lan_input_share.input.win32_injector import Win32InputInjector
@@ -101,12 +109,17 @@ from lan_input_share.transfer.windows_destination import (
     ResolvedDestination,
 )
 from lan_input_share.transfer.wire import manifest_from_payload, manifest_to_payload
+from lan_input_share.windows.input_helper_install import (
+    INPUT_HELPER_EXE_NAME,
+    InputHelperManager,
+)
 
 _LOGGER = logging.getLogger("lan_input_share.runtime")
 
 type StatusCallback = Callable[[str], None]
 type SlotStatusCallback = Callable[[ScreenPosition, str, str], None]
 type TransferStatusCallback = Callable[[FileTransferStatus], None]
+type HelperStatusCallback = Callable[[HelperStatus], None]
 type OverwriteDecider = Callable[[OverwritePromptRequest], Awaitable[PasteDecision]]
 
 _FILE_MARKER_PREFIX = "lan-input-share-files:"
@@ -114,6 +127,21 @@ _FILE_RATE_LIMIT_BYTES_PER_SECOND = 4 * 1024 * 1024
 _FILE_NETWORK_UTILIZATION = 0.75
 _CLIPBOARD_IMAGE_CHUNK_SIZE = 32 * 1024
 _MAX_CLIPBOARD_IMAGE_BYTES = 64 * 1024 * 1024
+
+
+class ManagedHelperInput(Protocol):
+    @property
+    def status(self) -> HelperStatus: ...
+
+    def add_status_callback(self, callback: HelperStatusCallback) -> None: ...
+
+    def inject(self, event: InputEvent) -> None: ...
+
+    def release_all(self, events: tuple[InputEvent, ...]) -> None: ...
+
+    def start(self) -> None: ...
+
+    def stop(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +322,8 @@ class NetworkRoleService:
         overwrite_decider: OverwriteDecider | None = None,
         destination_resolver: DestinationResolver | None = None,
         overwrite_timeout: float = 300.0,
+        helper_factory: Callable[[], ManagedHelperInput] | None = None,
+        helper_status: HelperStatusCallback | None = None,
     ) -> None:
         if transfer_progress_delay < 0 or transfer_progress_interval < 0:
             raise ValueError("文件传输进度时间参数不能为负数")
@@ -313,6 +343,8 @@ class NetworkRoleService:
         self._overwrite_decider = overwrite_decider or _cancel_overwrite
         self._destination_resolver = destination_resolver or ExplorerDestinationResolver()
         self._overwrite_timeout = overwrite_timeout
+        self._helper_factory = helper_factory or _create_default_helper_input
+        self._helper_status = helper_status or (lambda _status: None)
         self._preflight = PastePreflightService()
         self._identity: DeviceIdentity | None = None
         self._local_device: DeviceInfo | None = None
@@ -320,6 +352,8 @@ class NetworkRoleService:
         self._controller_runtime: ControllerRuntime | None = None
         self._client_runtime: ClientRuntime | None = None
         self._client_session: ControlSession | None = None
+        self._helper_input: ManagedHelperInput | None = None
+        self._client_injector: RoutedInputInjector | None = None
         self._controller_sessions: dict[PeerTarget, ControlSession] = {}
         self._pairing: PairingCoordinator | None = None
         self._tasks: list[asyncio.Task[None]] = []
@@ -362,6 +396,8 @@ class NetworkRoleService:
     async def start(self) -> None:
         self._stop.clear()
         self._loop = asyncio.get_running_loop()
+        if self._config.role is DeviceRole.CLIENT:
+            self._ensure_client_input()
         self._identity = DeviceIdentity.load_or_create(
             self._paths, self._config.device_name
         )
@@ -443,6 +479,10 @@ class NetworkRoleService:
         if self._client_runtime is not None:
             await self._client_runtime.stop()
             self._client_runtime = None
+        if self._helper_input is not None:
+            self._helper_input.stop()
+            self._helper_input = None
+            self._client_injector = None
         sessions = [*self._controller_sessions.values()]
         if self._client_session is not None:
             sessions.append(self._client_session)
@@ -683,6 +723,7 @@ class NetworkRoleService:
             _LOGGER.exception("slot status callback failed")
 
     async def _accept_controller_session(self, session: ControlSession) -> None:
+        self._ensure_client_input()
         previous = self._client_session
         if previous is not None and previous.state not in (
             SessionState.CLOSING,
@@ -709,9 +750,10 @@ class NetworkRoleService:
                         f"旧连接清理失败：{sanitize_transfer_error(str(exc))}"
                     )
         self._client_session = session
+        assert self._client_injector is not None
         runtime = ClientRuntime(
             session,
-            Win32InputInjector(),
+            self._client_injector,
             message_handler=self._client_message,
         )
         self._client_runtime = runtime
@@ -719,6 +761,25 @@ class NetworkRoleService:
         assert session.peer is not None
         self._status(f"已连接主控 {session.peer.name}")
         self._tasks.append(asyncio.create_task(self._watch_client_session(session)))
+
+    def _ensure_client_input(self) -> None:
+        if self._helper_input is not None:
+            return
+        helper = self._helper_factory()
+        routed = RoutedInputInjector(
+            Win32InputInjector(),
+            helper,
+            status_callback=self._safe_helper_status,
+        )
+        self._helper_input = helper
+        self._client_injector = routed
+        helper.start()
+
+    def _safe_helper_status(self, status: HelperStatus) -> None:
+        try:
+            self._helper_status(status)
+        except Exception:
+            _LOGGER.exception("helper status callback failed")
 
     async def _watch_client_session(self, session: ControlSession) -> None:
         await session.wait_closed()
@@ -2147,6 +2208,26 @@ def _clipboard_item_from_message(message: ClipboardMessage) -> ClipboardItem | N
     except ValueError:
         return None
     return item if item.digest == digest else None
+
+
+def _create_default_helper_input() -> ManagedHelperInput:
+    executable = (
+        Path(sys.executable).resolve()
+        if getattr(sys, "frozen", False)
+        else Path(sys.argv[0]).resolve()
+    )
+    helper_source = executable.with_name(INPUT_HELPER_EXE_NAME)
+    manager = InputHelperManager()
+    status = manager.status(executable, helper_source)
+    if status.state is not HelperState.RUNNING:
+        return StaticHelperInput(HelperStatus(status.state, status.detail))
+    try:
+        approved = load_approved_client(manager.manifest_path)
+    except (OSError, ValueError) as exc:
+        return StaticHelperInput(
+            HelperStatus(HelperState.REPAIR_REQUIRED, f"助手安装清单无效：{exc}")
+        )
+    return HelperInputBridge(approved)
 
 
 __all__ = [
