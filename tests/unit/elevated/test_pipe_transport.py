@@ -3,11 +3,14 @@ from __future__ import annotations
 import threading
 
 import pytest
+import pywintypes  # type: ignore[import-untyped]
 
+from lan_input_share.elevated import pipe_transport
 from lan_input_share.elevated.pipe_transport import (
     NamedPipeClient,
     NamedPipeServer,
     PipeClosedError,
+    Win32PipeBackend,
     pipe_name_for,
     pipe_sddl_for,
 )
@@ -144,6 +147,29 @@ def test_connection_reports_available_bytes_without_reading() -> None:
 
     assert connection.available() == len(backend.read_result)
     assert backend.read_entered.is_set() is False
+
+
+def test_win32_client_retries_until_server_creates_pipe(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    waits = 0
+    expected_handle = object()
+
+    def wait_named_pipe(_name: str, _timeout_ms: int) -> None:
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            raise pywintypes.error(2, "WaitNamedPipe", "not found")
+
+    monkeypatch.setattr(pipe_transport.win32pipe, "WaitNamedPipe", wait_named_pipe)
+    monkeypatch.setattr(
+        pipe_transport.win32file,
+        "CreateFile",
+        lambda *_args: expected_handle,
+    )
+
+    handle = Win32PipeBackend().open_client("pipe", timeout=0.2)
+
+    assert handle is expected_handle
+    assert waits == 2
 
 
 def _capture_error(call: object, errors: list[BaseException]) -> None:

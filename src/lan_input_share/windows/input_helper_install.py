@@ -10,7 +10,9 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import escape
 
+import psutil
 import win32security  # type: ignore[import-untyped]
 
 from lan_input_share.elevated.models import HELPER_PROTOCOL_VERSION, HelperState
@@ -46,6 +48,7 @@ class InputHelperManager:
         account_name: str | None = None,
         command_runner: Callable[..., object] = subprocess.run,
         protect_file: Callable[[Path, str], None] | None = None,
+        stop_processes: Callable[[Path], None] | None = None,
     ) -> None:
         root = program_files or Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
         self.install_dir = root / "LanInputShare"
@@ -55,6 +58,7 @@ class InputHelperManager:
         self._account_name = account_name or _current_account_name()
         self._run = command_runner
         self._protect_file = protect_file or _protect_installed_file
+        self._stop_processes = stop_processes or _stop_processes_at_path
 
     def status(self, main_exe: Path, helper_source: Path) -> HelperInstallStatus:
         if not self.installed_helper.exists() and not self.manifest_path.exists():
@@ -100,6 +104,11 @@ class InputHelperManager:
             if helper_hash != approved_hash:
                 raise ValueError("Program Files 内的助手来源不是已批准构建产物")
 
+        self._run_command(
+            ["schtasks.exe", "/End", "/TN", INPUT_HELPER_TASK_NAME],
+            check=False,
+        )
+        self._stop_processes(self.installed_helper)
         self.install_dir.mkdir(parents=True, exist_ok=True)
         token = uuid.uuid4().hex
         staged_helper = self.install_dir / f".{INPUT_HELPER_EXE_NAME}.{token}.tmp"
@@ -157,31 +166,38 @@ class InputHelperManager:
             ["schtasks.exe", "/Delete", "/TN", INPUT_HELPER_TASK_NAME, "/F"],
             check=False,
         )
+        self._stop_processes(self.installed_helper)
         self._unlink_if_exists(self.manifest_path)
         self._unlink_if_exists(self.installed_helper)
 
     def _create_task(self) -> None:
-        action = subprocess.list2cmdline(
-            [str(self.installed_helper), "--manifest", str(self.manifest_path)]
+        token = uuid.uuid4().hex
+        task_xml_path = self.install_dir / f".input-helper-task.{token}.xml"
+        arguments = subprocess.list2cmdline(
+            ["--manifest", str(self.manifest_path)]
         )
-        self._run_command(
-            [
-                "schtasks.exe",
-                "/Create",
-                "/TN",
-                INPUT_HELPER_TASK_NAME,
-                "/TR",
-                action,
-                "/SC",
-                "ONLOGON",
-                "/RU",
-                self._account_name,
-                "/RL",
-                "HIGHEST",
-                "/IT",
-                "/F",
-            ]
+        task_xml = _interactive_task_xml(
+            account_name=self._account_name,
+            user_sid=self._user_sid,
+            helper_path=self.installed_helper,
+            arguments=arguments,
         )
+        task_xml_path.write_text(task_xml, encoding="utf-16")
+        self._protect_file(task_xml_path, self._user_sid)
+        try:
+            self._run_command(
+                [
+                    "schtasks.exe",
+                    "/Create",
+                    "/TN",
+                    INPUT_HELPER_TASK_NAME,
+                    "/XML",
+                    str(task_xml_path),
+                    "/F",
+                ]
+            )
+        finally:
+            self._unlink_if_exists(task_xml_path)
 
     def _run_command(self, args: Sequence[str], *, check: bool = True) -> None:
         self._run(
@@ -228,6 +244,65 @@ def _current_account_name() -> str:
     return f"{domain}\\{username}" if domain else username
 
 
+def _interactive_task_xml(
+    *,
+    account_name: str,
+    user_sid: str,
+    helper_path: Path,
+    arguments: str,
+) -> str:
+    author = escape(account_name)
+    sid = escape(user_sid)
+    command = escape(str(helper_path))
+    action_arguments = escape(arguments)
+    return f'''<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>{author}</Author>
+    <Description>LanInputShare high-integrity input helper</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{sid}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{sid}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{command}</Command>
+      <Arguments>{action_arguments}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+'''
+
+
 def _protect_installed_file(path: Path, user_sid: str) -> None:
     sddl = f"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;{user_sid})"
     descriptor = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
@@ -240,6 +315,25 @@ def _protect_installed_file(path: Path, user_sid: str) -> None:
         | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
         descriptor,
     )
+
+
+def _stop_processes_at_path(path: Path) -> None:
+    expected = os.path.normcase(os.path.abspath(path))
+    matches: list[psutil.Process] = []
+    for process in psutil.process_iter(["exe"]):
+        try:
+            executable = process.info.get("exe")
+            if executable and os.path.normcase(os.path.abspath(executable)) == expected:
+                process.kill()
+                matches.append(process)
+        except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+            continue
+    if not matches:
+        return
+    _, alive = psutil.wait_procs(matches, timeout=3)
+    if alive:
+        identifiers = ", ".join(str(process.pid) for process in alive)
+        raise RuntimeError(f"高权限输入助手进程未能停止: {identifiers}")
 
 
 __all__ = [

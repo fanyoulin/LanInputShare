@@ -16,6 +16,7 @@ LanInputShare 是一个面向 Windows 10/11 的局域网键盘、鼠标和剪贴
 - TLS 1.3 加密连接、设备身份校验和首次连接确认。
 - 记忆设备名称、角色、网卡、客户端 IP、端口与屏幕布局。
 - 支持托盘运行、暂停共享、返回主控、诊断导出和安全退出。
+- 客户端可一次性启用“增强控制”，日常无需管理员运行主程序即可操作普通桌面上的管理员窗口。
 
 ## 使用边界
 
@@ -28,7 +29,8 @@ LanInputShare 是一个面向 Windows 10/11 的局域网键盘、鼠标和剪贴
 | 默认端口 | TCP `24870` |
 | 代理兼容 | 可与 Clash/VPN/TUN 共存，但局域网地址必须走物理网卡 |
 | 跨平台 | 暂不支持 macOS、Linux |
-| 安全桌面 | 不支持登录界面和 UAC 安全桌面 |
+| 管理员窗口 | 客户端启用增强控制后支持普通桌面上的管理员窗口 |
+| 安全桌面 | 不支持登录界面、锁屏和 UAC 安全桌面，仍需目标电脑本机确认 |
 
 ## 快速开始
 
@@ -37,6 +39,8 @@ LanInputShare 是一个面向 Windows 10/11 的局域网键盘、鼠标和剪贴
 3. 在主控上选择“主控”，设置本机位置，在十字布局中添加客户端的局域网 IPv4 和端口。
 4. 点击“保存并启动”。首次连接时，到客户端电脑确认主控名称和证书短指纹。
 5. 连接成功后，将鼠标从相邻边缘移出即可跨屏。
+
+首次打开时，设备名称默认使用 Windows 计算机名，网卡默认“自动选择物理网卡”。如需操作客户端的管理员窗口，在客户端“增强控制”一栏点击启用并确认一次 UAC；以后正常启动不会重复弹出授权。
 
 布局必须相邻。多台设备时需要占用“中”位置，例如：
 
@@ -81,8 +85,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 构建脚本会创建隔离环境，安装锁定依赖，运行测试、Ruff 和 mypy，执行 PyInstaller，并生成：
 
 - `dist\LanInputShare\LanInputShare.exe`
-- `dist\LanInputShare.manifest.txt`
-- `dist\LanInputShare.sha256`
+- `dist\LanInputShare\LanInputShareInputHelper.exe`
+- `dist\LanInputShare\release-manifest.txt`
+- `dist\LanInputShare\SHA256SUMS.txt`
+
+必须整体复制 `dist\LanInputShare` 目录，不能只复制其中一个 EXE。`SHA256SUMS.txt` 同时记录主程序与助手的 SHA-256。
 
 ## 配置、日志与卸载
 
@@ -94,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 - `logs\`：运行日志；
 - `staging\`：跨设备文件传输暂存区。
 
-卸载时先从托盘退出程序，再删除发行目录。若需要完全重置配对关系，可在确认不再需要原身份后删除 `%LOCALAPPDATA%\LanInputShare`；此操作会同时清除配置、身份、信任和暂存文件。
+卸载时先在客户端“增强控制”一栏选择移除，再从托盘退出程序并删除发行目录。增强助手安装在 `%ProgramFiles%\LanInputShare`，由受保护清单绑定主程序路径、SHA-256、当前 Windows 用户和协议版本。若需要完全重置配对关系，可在确认不再需要原身份后删除 `%LOCALAPPDATA%\LanInputShare`；此操作会同时清除配置、身份、信任和暂存文件。
 
 ## 安全说明
 

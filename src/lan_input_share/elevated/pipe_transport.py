@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import re
 import threading
+import time
 from typing import Protocol, cast
 
 import pywintypes  # type: ignore[import-untyped]
@@ -186,7 +187,16 @@ class Win32PipeBackend:
                 raise
 
     def open_client(self, name: str, timeout: float) -> object:
-        win32pipe.WaitNamedPipe(name, round(timeout * 1000))
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                win32pipe.WaitNamedPipe(name, round(remaining * 1000))
+                break
+            except pywintypes.error as exc:
+                if exc.winerror != 2 or remaining <= 0:
+                    raise
+                time.sleep(min(0.01, remaining))
         return win32file.CreateFile(
             name,
             win32con.GENERIC_READ | win32con.GENERIC_WRITE,

@@ -16,22 +16,32 @@ from lan_input_share.windows.input_helper_install import (
 class RecordingRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], dict[str, Any]]] = []
+        self.task_xml = ""
         self.fail_create = False
 
     def __call__(self, args: list[str], **kwargs: Any) -> object:
         self.calls.append((list(args), dict(kwargs)))
         if self.fail_create and "/Create" in args:
             raise RuntimeError("task create failed")
+        if "/XML" in args:
+            self.task_xml = Path(args[args.index("/XML") + 1]).read_text(
+                encoding="utf-16"
+            )
         return object()
 
 
-def manager(tmp_path: Path, runner: RecordingRunner) -> InputHelperManager:
+def manager(
+    tmp_path: Path,
+    runner: RecordingRunner,
+    stopped_paths: list[Path] | None = None,
+) -> InputHelperManager:
     return InputHelperManager(
         program_files=tmp_path / "Program Files",
         user_sid="S-1-5-21-1001",
         account_name=r"DESKTOP\tester",
         command_runner=runner,
         protect_file=lambda _path, _sid: None,
+        stop_processes=(stopped_paths.append if stopped_paths is not None else None),
     )
 
 
@@ -57,9 +67,13 @@ def test_install_writes_atomic_artifacts_and_highest_interactive_task(
     assert manifest["helper_protocol_version"] == HELPER_PROTOCOL_VERSION
     create_args, options = runner.calls[-1]
     assert create_args[:4] == ["schtasks.exe", "/Create", "/TN", INPUT_HELPER_TASK_NAME]
-    assert create_args[create_args.index("/RU") + 1] == r"DESKTOP\tester"
-    assert "/IT" in create_args
-    assert create_args[create_args.index("/RL") + 1] == "HIGHEST"
+    assert "/XML" in create_args
+    assert "<UserId>S-1-5-21-1001</UserId>" in runner.task_xml
+    assert "<LogonType>InteractiveToken</LogonType>" in runner.task_xml
+    assert "<RunLevel>HighestAvailable</RunLevel>" in runner.task_xml
+    assert str(subject.installed_helper) in runner.task_xml
+    assert str(subject.manifest_path) in runner.task_xml
+    assert not list(subject.install_dir.glob(".input-helper-task.*.xml"))
     assert options["shell"] is False
 
 
@@ -130,6 +144,45 @@ def test_failed_task_creation_rolls_back_previous_files(tmp_path: Path) -> None:
 
     assert subject.installed_helper.read_bytes() == old_helper
     assert subject.manifest_path.read_bytes() == old_manifest
+
+
+def test_install_stops_orphaned_helper_before_replacing_files(tmp_path: Path) -> None:
+    main_exe = tmp_path / "release" / "LanInputShare.exe"
+    helper_source = tmp_path / "release" / "LanInputShareInputHelper.exe"
+    _write(main_exe, b"main")
+    _write(helper_source, b"helper")
+    stopped_paths: list[Path] = []
+    runner = RecordingRunner()
+    subject = manager(tmp_path, runner, stopped_paths)
+
+    subject.install(main_exe, helper_source)
+
+    assert stopped_paths == [subject.installed_helper]
+    assert runner.calls[0][0] == [
+        "schtasks.exe",
+        "/End",
+        "/TN",
+        INPUT_HELPER_TASK_NAME,
+    ]
+    assert runner.calls[0][1]["check"] is False
+
+
+def test_remove_stops_orphaned_helper_before_deleting_files(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    stopped_paths: list[Path] = []
+    subject = manager(tmp_path, runner, stopped_paths)
+    _write(subject.installed_helper, b"helper")
+    _write(subject.manifest_path, b"{}")
+
+    subject.remove()
+
+    assert stopped_paths == [subject.installed_helper]
+    assert [call[0] for call in runner.calls] == [
+        ["schtasks.exe", "/End", "/TN", INPUT_HELPER_TASK_NAME],
+        ["schtasks.exe", "/Delete", "/TN", INPUT_HELPER_TASK_NAME, "/F"],
+    ]
+    assert not subject.installed_helper.exists()
+    assert not subject.manifest_path.exists()
 
 
 def test_tampered_source_inside_install_directory_is_rejected(tmp_path: Path) -> None:

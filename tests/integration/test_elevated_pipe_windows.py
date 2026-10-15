@@ -37,14 +37,16 @@ def test_named_pipe_round_trip_and_reports_real_client_pid() -> None:
 
     thread = threading.Thread(target=serve)
     thread.start()
-    client = NamedPipeClient(name).connect(timeout=2.0)
+    client = None
     try:
+        client = NamedPipeClient(name).connect(timeout=2.0)
         client.write(b"ping")
         assert client.read() == b"pong"
     finally:
-        client.close()
+        if client is not None:
+            client.close()
         server.close()
-    thread.join(timeout=2)
+        thread.join(timeout=2)
 
     assert thread.is_alive() is False
     assert received == [b"ping"]
