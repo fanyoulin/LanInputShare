@@ -49,6 +49,9 @@ class FakeBackend:
             raise PipeClosedError("closed")
         return self.read_result
 
+    def available(self, handle: object) -> int:
+        return len(self.read_result)
+
     def write(self, handle: object, data: bytes) -> None:
         self.writes.append(data)
 
@@ -133,6 +136,14 @@ def test_connection_writes_exact_bytes() -> None:
     connection.write(b"frame")
 
     assert backend.writes == [b"frame"]
+
+
+def test_connection_reports_available_bytes_without_reading() -> None:
+    backend = FakeBackend()
+    connection = NamedPipeClient("pipe", backend=backend).connect(timeout=0.5)
+
+    assert connection.available() == len(backend.read_result)
+    assert backend.read_entered.is_set() is False
 
 
 def _capture_error(call: object, errors: list[BaseException]) -> None:

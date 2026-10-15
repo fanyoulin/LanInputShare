@@ -31,6 +31,8 @@ class PipeBackend(Protocol):
 
     def read(self, handle: object, size: int) -> bytes: ...
 
+    def available(self, handle: object) -> int: ...
+
     def write(self, handle: object, data: bytes) -> None: ...
 
     def cancel(self, handle: object) -> None: ...
@@ -76,6 +78,13 @@ class PipeConnection:
         handle = self._require_handle()
         try:
             self._backend.write(handle, data)
+        except BaseException as exc:
+            raise _translate_closed(exc) from exc
+
+    def available(self) -> int:
+        handle = self._require_handle()
+        try:
+            return self._backend.available(handle)
         except BaseException as exc:
             raise _translate_closed(exc) from exc
 
@@ -191,6 +200,10 @@ class Win32PipeBackend:
     def read(self, handle: object, size: int) -> bytes:
         _status, data = win32file.ReadFile(handle, size)
         return bytes(data)
+
+    def available(self, handle: object) -> int:
+        _data, available, _remaining = win32pipe.PeekNamedPipe(handle, 0)
+        return int(available)
 
     def write(self, handle: object, data: bytes) -> None:
         win32file.WriteFile(handle, data)
