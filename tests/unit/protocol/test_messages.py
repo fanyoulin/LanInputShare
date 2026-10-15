@@ -8,6 +8,7 @@ from lan_input_share.protocol.messages import (
     AuthResponseMessage,
     ClipboardMessage,
     HelloMessage,
+    InputCapabilityMessage,
     MessageType,
     PairingDecisionMessage,
     ReleaseInputMessage,
@@ -16,8 +17,23 @@ from lan_input_share.protocol.messages import (
 )
 
 
-def test_protocol_version_is_two_for_preflight_handshake() -> None:
-    assert PROTOCOL_VERSION == 2
+def test_protocol_version_is_three_for_input_capability() -> None:
+    assert PROTOCOL_VERSION == 3
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["standard", "elevated", "secure_desktop", "unavailable", "repair_required"],
+)
+def test_input_capability_message_round_trip(mode: str) -> None:
+    message = InputCapabilityMessage("s", 1, {"mode": mode, "detail": "状态说明"})
+
+    assert message_from_mapping(message.to_mapping()) == message
+
+
+def test_input_capability_rejects_unknown_mode() -> None:
+    with pytest.raises(ProtocolError, match="输入能力"):
+        InputCapabilityMessage("s", 1, {"mode": "magic", "detail": "bad"})
 
 
 def test_file_paste_preflight_messages_round_trip() -> None:

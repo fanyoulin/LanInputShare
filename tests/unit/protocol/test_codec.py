@@ -57,6 +57,21 @@ def test_decoder_rejects_unknown_protocol_version():
         FrameDecoder().feed(struct.pack(">I", len(body)) + body)
 
 
+def test_decoder_rejects_previous_version_two_frame():
+    body = json.dumps(
+        {
+            "version": 2,
+            "type": "heartbeat",
+            "session_id": "s",
+            "sequence": 1,
+            "payload": {"sent_at_ns": 1},
+        }
+    ).encode()
+
+    with pytest.raises(ProtocolError, match="协议版本"):
+        FrameDecoder().feed(struct.pack(">I", len(body)) + body)
+
+
 def test_decoder_is_poisoned_after_malformed_json():
     decoder = FrameDecoder()
     malformed = b"{not-json"

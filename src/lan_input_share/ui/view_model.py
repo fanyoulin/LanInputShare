@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
+import socket
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -13,6 +15,7 @@ from PySide6.QtCore import QObject, Signal
 
 from lan_input_share.config.models import AppConfig, PeerTarget
 from lan_input_share.core.models import DeviceRole, ScreenPosition
+from lan_input_share.elevated.models import HelperState, HelperStatus
 from lan_input_share.logging_setup import sanitize_transfer_error
 from lan_input_share.routing.layout import CrossLayout
 from lan_input_share.runtime.service import OverwritePromptRequest
@@ -80,6 +83,15 @@ class TransferView:
     can_cancel: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class HelperStatusView:
+    mode: HelperState
+    text: str
+    can_enable: bool
+    can_repair: bool
+    can_remove: bool
+
+
 class AppViewModel(QObject):
     validation_changed = Signal(bool)
     connection_status_changed = Signal(str)
@@ -88,6 +100,7 @@ class AppViewModel(QObject):
     overwrite_requested = Signal(object)
     slot_status_changed = Signal(object)
     transfer_changed = Signal(object)
+    helper_status_changed = Signal(object)
     paused_changed = Signal(bool)
     diagnostics_requested = Signal()
     startup_requested = Signal(bool)
@@ -98,9 +111,9 @@ class AppViewModel(QObject):
     def __init__(self, runtime: object) -> None:
         super().__init__()
         self._runtime = runtime
-        self._device_name = ""
+        self._device_name = _default_device_name()
         self._role: DeviceRole | None = None
-        self._adapter_id = ""
+        self._adapter_id = "auto"
         self._local_position: ScreenPosition | None = None
         self._peers: dict[ScreenPosition, PeerTarget] = {}
         self._pending_pairings: dict[str, Future[bool]] = {}
@@ -110,6 +123,9 @@ class AppViewModel(QObject):
         self._paused = False
         self._connection_status_text = "尚未连接"
         self._transfer: TransferView | None = None
+        self._helper_status = _helper_status_view(
+            HelperStatus(HelperState.NOT_INSTALLED, "")
+        )
 
     @property
     def can_start(self) -> bool:
@@ -129,6 +145,10 @@ class AppViewModel(QObject):
     @property
     def transfer(self) -> TransferView | None:
         return self._transfer
+
+    @property
+    def helper_status(self) -> HelperStatusView:
+        return self._helper_status
 
     @property
     def device_name(self) -> str:
@@ -315,6 +335,19 @@ class AppViewModel(QObject):
             )
         )
 
+    def update_helper_status(self, status: HelperStatus) -> None:
+        self._helper_status = _helper_status_view(status)
+        self.helper_status_changed.emit(self._helper_status)
+
+    def enable_input_helper(self) -> None:
+        self._call_runtime("enable_input_helper")
+
+    def repair_input_helper(self) -> None:
+        self._call_runtime("repair_input_helper")
+
+    def remove_input_helper(self) -> None:
+        self._call_runtime("remove_input_helper")
+
     def pause(self) -> None:
         if self._paused:
             return
@@ -456,9 +489,52 @@ def _format_bytes(value: int | float) -> str:
     return f"{amount:.1f} {unit}"
 
 
+def _default_device_name() -> str:
+    return (os.environ.get("COMPUTERNAME") or socket.gethostname()).strip()
+
+
+def _helper_status_view(status: HelperStatus) -> HelperStatusView:
+    state = status.state
+    detail = status.detail.strip()
+    if state in {HelperState.NOT_INSTALLED, HelperState.DISABLED}:
+        return HelperStatusView(
+            state,
+            "未启用（当前使用标准控制）",
+            True,
+            False,
+            False,
+        )
+    if state is HelperState.RUNNING:
+        return HelperStatusView(
+            state,
+            "增强控制可用",
+            False,
+            False,
+            True,
+        )
+    if state is HelperState.SECURE_DESKTOP:
+        return HelperStatusView(
+            state,
+            "客户端处于 UAC 安全桌面，需在客户端本机确认",
+            False,
+            False,
+            True,
+        )
+    if state is HelperState.REPAIR_REQUIRED:
+        text = "增强控制需要修复"
+        if detail:
+            text += f"：{detail}"
+        return HelperStatusView(state, text, False, True, True)
+    text = "增强控制暂不可用"
+    if detail:
+        text += f"：{detail}"
+    return HelperStatusView(state, text, False, True, True)
+
+
 __all__ = [
     "AppViewModel",
     "ConnectionStatusView",
+    "HelperStatusView",
     "OverwritePromptView",
     "PairingView",
     "SlotView",

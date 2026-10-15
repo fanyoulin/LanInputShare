@@ -6,12 +6,17 @@ import pytest
 
 from lan_input_share.config.models import AppConfig
 from lan_input_share.core.models import DeviceRole, ScreenPosition
+from lan_input_share.elevated.models import HelperState, HelperStatus
 from lan_input_share.runtime.service import OverwritePromptRequest
 from lan_input_share.security.identity import PeerHello
 from lan_input_share.security.pairing import PairingRequest
 from lan_input_share.transfer.preflight import PasteDecision
 from lan_input_share.transfer.status import FileTransferStatus, TransferState
-from lan_input_share.ui.view_model import AppViewModel, ConnectionStatusView
+from lan_input_share.ui.view_model import (
+    AppViewModel,
+    ConnectionStatusView,
+    HelperStatusView,
+)
 
 
 class FakeRuntime:
@@ -20,6 +25,7 @@ class FakeRuntime:
         self.returned = 0
         self.cancelled: list[str] = []
         self.configured: list[AppConfig] = []
+        self.helper_actions: list[str] = []
 
     def pause(self) -> None:
         self.paused += 1
@@ -33,17 +39,93 @@ class FakeRuntime:
     def configure(self, config: AppConfig) -> None:
         self.configured.append(config)
 
+    def enable_input_helper(self) -> None:
+        self.helper_actions.append("enable")
+
+    def repair_input_helper(self) -> None:
+        self.helper_actions.append("repair")
+
+    def remove_input_helper(self) -> None:
+        self.helper_actions.append("remove")
+
 
 def test_first_run_requires_name_role_and_adapter_before_start(qtbot) -> None:  # type: ignore[no-untyped-def]
     view_model = AppViewModel(FakeRuntime())
     _ = qtbot
 
     assert view_model.can_start is False
-    view_model.set_device_name("Desk")
+    assert view_model.device_name
+    assert view_model.adapter_id == "auto"
     view_model.set_role(DeviceRole.CONTROLLER)
-    assert view_model.can_start is False
-    view_model.set_adapter("Ethernet")
     assert view_model.can_start is True
+
+
+def test_existing_config_preserves_saved_name_and_adapter() -> None:
+    view_model = AppViewModel(FakeRuntime())
+    view_model.load_config(
+        AppConfig(
+            version=2,
+            device_name="Saved-PC",
+            role=DeviceRole.CLIENT,
+            adapter_id="Wi-Fi",
+            bind_ip=None,
+            port=24870,
+        )
+    )
+
+    assert view_model.device_name == "Saved-PC"
+    assert view_model.adapter_id == "Wi-Fi"
+
+
+def test_fresh_config_defaults_to_windows_computer_name_and_auto_adapter(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("COMPUTERNAME", "OFFICE-PC")
+
+    view_model = AppViewModel(FakeRuntime())
+
+    assert view_model.device_name == "OFFICE-PC"
+    assert view_model.adapter_id == "auto"
+
+
+@pytest.mark.parametrize(
+    ("state", "text", "actions"),
+    [
+        (HelperState.NOT_INSTALLED, "未启用", (True, False, False)),
+        (HelperState.RUNNING, "可用", (False, False, True)),
+        (HelperState.SECURE_DESKTOP, "安全桌面", (False, False, True)),
+        (HelperState.UNAVAILABLE, "暂不可用", (False, True, True)),
+        (HelperState.REPAIR_REQUIRED, "需要修复", (False, True, True)),
+    ],
+)
+def test_helper_status_view_exposes_five_user_states(
+    state: HelperState,
+    text: str,
+    actions: tuple[bool, bool, bool],
+) -> None:
+    view_model = AppViewModel(FakeRuntime())
+    changes: list[HelperStatusView] = []
+    view_model.helper_status_changed.connect(changes.append)
+
+    view_model.update_helper_status(HelperStatus(state, "detail"))
+
+    assert text in changes[-1].text
+    assert (
+        changes[-1].can_enable,
+        changes[-1].can_repair,
+        changes[-1].can_remove,
+    ) == actions
+
+
+def test_helper_actions_call_explicit_runtime_operations() -> None:
+    runtime = FakeRuntime()
+    view_model = AppViewModel(runtime)
+
+    view_model.enable_input_helper()
+    view_model.repair_input_helper()
+    view_model.remove_input_helper()
+
+    assert runtime.helper_actions == ["enable", "repair", "remove"]
 
 
 def test_controller_applies_version_two_cross_layout_config() -> None:

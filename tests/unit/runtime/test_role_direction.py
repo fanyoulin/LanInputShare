@@ -26,6 +26,8 @@ class _FakeControllerSession:
         self, state: SessionState, *, device_id: str = "controller-id"
     ) -> None:
         self.state = state
+        self.session_id = "session"
+        self.sent: list[object] = []
         self.peer = DeviceInfo(
             device_id,
             "controller",
@@ -48,6 +50,9 @@ class _FakeControllerSession:
         self.close_reason = reason
         self.state = SessionState.CLOSED
         self._closed.set()
+
+    async def send(self, message: object) -> None:
+        self.sent.append(message)
 
 
 class _FakeRuntime:

@@ -6,7 +6,7 @@ from typing import ClassVar, cast
 
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 
 class ProtocolError(ValueError):
@@ -33,6 +33,7 @@ class MessageType(StrEnum):
     FILE_PASTE_PROBE = "file_paste_probe"
     FILE_PASTE_DECISION = "file_paste_decision"
     ROLE_CONFLICT = "role_conflict"
+    INPUT_CAPABILITY = "input_capability"
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,26 @@ class RoleConflictMessage(WireMessage):
     TYPE: ClassVar[MessageType] = MessageType.ROLE_CONFLICT
 
 
+@dataclass(frozen=True, slots=True)
+class InputCapabilityMessage(WireMessage):
+    TYPE: ClassVar[MessageType] = MessageType.INPUT_CAPABILITY
+
+    def __post_init__(self) -> None:
+        super(InputCapabilityMessage, self).__post_init__()
+        if set(self.payload) != {"mode", "detail"}:
+            raise ProtocolError("输入能力消息字段无效")
+        mode = self.payload["mode"]
+        detail = self.payload["detail"]
+        if mode not in {
+            "standard",
+            "elevated",
+            "secure_desktop",
+            "unavailable",
+            "repair_required",
+        } or not isinstance(detail, str):
+            raise ProtocolError("输入能力消息内容无效")
+
+
 _MESSAGE_CLASSES: dict[MessageType, type[WireMessage]] = {
     cls.TYPE: cls
     for cls in (
@@ -152,6 +173,7 @@ _MESSAGE_CLASSES: dict[MessageType, type[WireMessage]] = {
         FilePasteProbeMessage,
         FilePasteDecisionMessage,
         RoleConflictMessage,
+        InputCapabilityMessage,
     )
 }
 

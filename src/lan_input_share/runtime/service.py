@@ -70,6 +70,7 @@ from lan_input_share.protocol.messages import (
     FilePasteDecisionMessage,
     FilePasteProbeMessage,
     FileRequestMessage,
+    InputCapabilityMessage,
     JsonValue,
     WireMessage,
 )
@@ -354,6 +355,8 @@ class NetworkRoleService:
         self._client_session: ControlSession | None = None
         self._helper_input: ManagedHelperInput | None = None
         self._client_injector: RoutedInputInjector | None = None
+        self._latest_helper_status: HelperStatus | None = None
+        self._last_sent_capability: str | None = None
         self._controller_sessions: dict[PeerTarget, ControlSession] = {}
         self._pairing: PairingCoordinator | None = None
         self._tasks: list[asyncio.Task[None]] = []
@@ -758,6 +761,9 @@ class NetworkRoleService:
         )
         self._client_runtime = runtime
         await runtime.start()
+        self._last_sent_capability = None
+        if self._latest_helper_status is not None:
+            await self._send_input_capability(self._latest_helper_status)
         assert session.peer is not None
         self._status(f"已连接主控 {session.peer.name}")
         self._tasks.append(asyncio.create_task(self._watch_client_session(session)))
@@ -776,10 +782,33 @@ class NetworkRoleService:
         helper.start()
 
     def _safe_helper_status(self, status: HelperStatus) -> None:
+        self._latest_helper_status = status
         try:
             self._helper_status(status)
         except Exception:
             _LOGGER.exception("helper status callback failed")
+        loop = self._loop
+        if loop is not None and self._client_session is not None:
+            loop.call_soon_threadsafe(
+                lambda: asyncio.create_task(self._send_input_capability(status))
+            )
+
+    async def _send_input_capability(self, status: HelperStatus) -> None:
+        session = self._client_session
+        if session is None:
+            return
+        mode = _capability_mode(status.state)
+        if mode == self._last_sent_capability:
+            return
+        await session.send(
+            InputCapabilityMessage(
+                session.session_id,
+                self._wire_sequence,
+                {"mode": mode, "detail": status.detail},
+            )
+        )
+        self._wire_sequence += 1
+        self._last_sent_capability = mode
 
     async def _watch_client_session(self, session: ControlSession) -> None:
         await session.wait_closed()
@@ -788,6 +817,7 @@ class NetworkRoleService:
         runtime = self._client_runtime
         self._client_session = None
         self._client_runtime = None
+        self._last_sent_capability = None
         cleanup_errors: list[Exception] = []
         if session.peer is not None:
             try:
@@ -972,6 +1002,9 @@ class NetworkRoleService:
         await self._apply_clipboard_actions(coordinator.local_changed(item))
 
     async def _controller_message(self, _device_id: str, message: WireMessage) -> None:
+        if isinstance(message, InputCapabilityMessage):
+            self._receive_input_capability(_device_id, message)
+            return
         if isinstance(message, FileOfferMessage):
             await self._receive_file_offer(_device_id, message)
             return
@@ -994,6 +1027,29 @@ class NetworkRoleService:
         self._file_offer = None
         self._completed_file_targets.clear()
         await self._receive_clipboard_message(_device_id, message)
+
+    def _receive_input_capability(
+        self,
+        device_id: str,
+        message: InputCapabilityMessage,
+    ) -> None:
+        mode = str(message.payload["mode"])
+        detail = str(message.payload["detail"])
+        label = {
+            "standard": "标准控制",
+            "elevated": "增强控制可用",
+            "secure_desktop": "安全桌面，远程输入暂停",
+            "unavailable": "增强控制暂不可用",
+            "repair_required": "增强控制需要修复",
+        }[mode]
+        if detail:
+            label = f"{label}：{detail}"
+        for target, session in self._controller_sessions.items():
+            peer = session.peer
+            if peer is not None and peer.device_id == device_id:
+                self._safe_slot_status(target.position, peer.name, label)
+                self._safe_status(f"客户端 {target.host} 输入能力：{label}")
+                return
 
     async def _client_message(self, message: WireMessage) -> None:
         assert self._client_session is not None and self._client_session.peer is not None
@@ -2228,6 +2284,18 @@ def _create_default_helper_input() -> ManagedHelperInput:
             HelperStatus(HelperState.REPAIR_REQUIRED, f"助手安装清单无效：{exc}")
         )
     return HelperInputBridge(approved)
+
+
+def _capability_mode(state: HelperState) -> str:
+    if state is HelperState.RUNNING:
+        return "elevated"
+    if state is HelperState.SECURE_DESKTOP:
+        return "secure_desktop"
+    if state is HelperState.REPAIR_REQUIRED:
+        return "repair_required"
+    if state in {HelperState.NOT_INSTALLED, HelperState.DISABLED}:
+        return "standard"
+    return "unavailable"
 
 
 __all__ = [

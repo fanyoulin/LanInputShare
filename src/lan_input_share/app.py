@@ -21,6 +21,7 @@ from lan_input_share.config.models import AppConfig, ConfigError
 from lan_input_share.config.paths import AppPaths
 from lan_input_share.config.store import ConfigStore
 from lan_input_share.core.models import ScreenPosition
+from lan_input_share.elevated.models import HelperStatus
 from lan_input_share.logging_setup import configure_logging
 from lan_input_share.network.adapters import classify_adapter, list_adapters
 from lan_input_share.runtime.service import NetworkRoleService, OverwritePromptRequest
@@ -32,7 +33,11 @@ from lan_input_share.windows.input_helper_install import (
     INPUT_HELPER_EXE_NAME,
     InputHelperManager,
 )
-from lan_input_share.windows.privilege import is_elevated
+from lan_input_share.windows.privilege import (
+    is_elevated,
+    request_helper_install,
+    request_helper_remove,
+)
 
 _ERROR_ALREADY_EXISTS = 183
 _WINDOW_TITLE = "局域网键鼠共享"
@@ -177,6 +182,7 @@ class _ConfiguredRuntime:
         self._transfer_status_callback: (
             Callable[[FileTransferStatus], None] | None
         ) = None
+        self._helper_status_callback: Callable[[HelperStatus], None] | None = None
         self._overwrite_callback: (
             Callable[[OverwritePromptRequest], Future[PasteDecision]] | None
         ) = None
@@ -198,6 +204,11 @@ class _ConfiguredRuntime:
         self, callback: Callable[[FileTransferStatus], None]
     ) -> None:
         self._transfer_status_callback = callback
+
+    def set_helper_status_callback(
+        self, callback: Callable[[HelperStatus], None]
+    ) -> None:
+        self._helper_status_callback = callback
 
     def set_overwrite_callback(
         self,
@@ -229,6 +240,15 @@ class _ConfiguredRuntime:
     def cancel_transfer(self, transfer_id: str) -> None:
         if self._service is not None:
             self._submit(self._service.cancel_transfer(transfer_id))
+
+    def enable_input_helper(self) -> None:
+        request_helper_install(str(_current_executable()))
+
+    def repair_input_helper(self) -> None:
+        request_helper_install(str(_current_executable()))
+
+    def remove_input_helper(self) -> None:
+        request_helper_remove(str(_current_executable()))
 
     def remember_close_choice(self, choice: CloseChoice | None) -> None:
         try:
@@ -275,6 +295,7 @@ class _ConfiguredRuntime:
                 slot_status=self._slot_status,
                 pairing_decider=self._decide_pairing,
                 transfer_status=self._transfer_status,
+                helper_status=self._helper_status,
                 overwrite_decider=self._decide_overwrite,
             )
             try:
@@ -307,6 +328,11 @@ class _ConfiguredRuntime:
 
     def _transfer_status(self, status: FileTransferStatus) -> None:
         callback = self._transfer_status_callback
+        if callback is not None:
+            callback(status)
+
+    def _helper_status(self, status: HelperStatus) -> None:
+        callback = self._helper_status_callback
         if callback is not None:
             callback(status)
 
@@ -462,6 +488,7 @@ def _run_gui(*, minimized: bool) -> int:
     runtime.set_overwrite_callback(view_model.decide_overwrite)
     runtime.set_slot_status_callback(view_model.update_slot_status)
     runtime.set_transfer_status_callback(view_model.update_transfer_status)
+    runtime.set_helper_status_callback(view_model.update_helper_status)
     view_model.transfer_changed.connect(transfer_popup.update_transfer)
     try:
         config = store.load()
