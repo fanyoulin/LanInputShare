@@ -27,7 +27,7 @@ def test_edge_without_neighbor_does_not_switch() -> None:
     assert layout.right_of("right") is None
 
 
-def test_vertical_position_maps_proportionally_between_resolutions() -> None:
+def test_vertical_position_keeps_the_same_percentage_between_resolutions() -> None:
     assert map_edge_position(ScreenInfo(1920, 1080), ScreenInfo(1366, 768), 0) == 0
     assert map_edge_position(ScreenInfo(1920, 1080), ScreenInfo(1366, 768), 1079) == 767
     assert map_edge_position(ScreenInfo(1920, 1080), ScreenInfo(1366, 768), 540) == 384
@@ -87,12 +87,19 @@ def test_cross_layout_rejects_disconnected_or_duplicate_devices() -> None:
         )
 
 
-def test_horizontal_and_vertical_edge_coordinates_map_proportionally() -> None:
+def test_horizontal_and_vertical_edge_coordinates_keep_the_same_percentage() -> None:
     source = ScreenInfo(1920, 1080)
     target = ScreenInfo(2560, 1440)
 
     assert map_horizontal_edge_position(source, target, 540) == 720
     assert map_vertical_edge_position(source, target, 960) == 1280
+
+
+def test_edge_mapping_is_unchanged_for_equal_resolutions() -> None:
+    screen = ScreenInfo(1920, 1080)
+
+    assert map_horizontal_edge_position(screen, screen, 540) == 540
+    assert map_vertical_edge_position(screen, screen, 960) == 960
 
 
 def test_edge_mapping_clamps_and_handles_single_pixel_screens() -> None:

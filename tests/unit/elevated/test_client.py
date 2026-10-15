@@ -116,6 +116,32 @@ def test_input_queue_coalesces_motion_and_preserves_transitions() -> None:
     assert events.get(0) == key_up
 
 
+def test_input_queue_preserves_first_motion_of_a_continuous_burst() -> None:
+    events = _InputQueue(capacity=3)
+
+    events.put_event(MouseMoveEvent(Point(1919, 500)))
+    events.put_event(MouseMoveEvent(Point(1900, 500)))
+    events.put_event(MouseMoveEvent(Point(1870, 500)))
+
+    assert events.get(0) == MouseMoveEvent(Point(1919, 500))
+    assert events.get(0) == MouseMoveEvent(Point(1870, 500))
+
+
+def test_input_queue_preserves_first_and_latest_motion_when_saturated() -> None:
+    events = _InputQueue(capacity=2)
+    key = KeyEvent(1, 1, True)
+    first = MouseMoveEvent(Point(1919, 500))
+    latest = MouseMoveEvent(Point(1800, 500))
+
+    events.put_event(key)
+    events.put_event(first)
+    events.put_event(latest)
+
+    assert events.get(0) == key
+    assert events.get(0) == first
+    assert events.get(0) == latest
+
+
 def test_queue_saturation_never_silently_drops_transition_or_release() -> None:
     events = _InputQueue(capacity=2)
     events.put_event(KeyEvent(1, 1, True))

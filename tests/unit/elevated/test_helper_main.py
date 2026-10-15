@@ -5,11 +5,27 @@ from pathlib import Path
 
 import pytest
 
+import lan_input_share.elevated.helper_main as helper_module
 from lan_input_share.elevated.helper_main import helper_main, load_approved_client
 
 
 def test_helper_smoke_test_needs_no_manifest() -> None:
     assert helper_main(["--smoke-test"]) == 0
+
+
+def test_helper_enables_physical_pixel_coordinates_before_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        helper_module,
+        "enable_per_monitor_v2",
+        lambda: calls.append(True),
+        raising=False,
+    )
+
+    assert helper_module.helper_main(["--smoke-test"]) == 0
+    assert calls == [True]
 
 
 def test_load_approved_client_manifest(tmp_path: Path) -> None:

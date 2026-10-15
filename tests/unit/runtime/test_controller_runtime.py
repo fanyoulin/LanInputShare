@@ -374,7 +374,7 @@ async def test_moving_back_across_client_edge_returns_local_control() -> None:
 
     hook.emit(MouseMoveEvent(Point(140, 100)))
     await asyncio.sleep(0.01)
-    hook.emit(MouseMoveEvent(Point(50, 100)))
+    hook.emit(MouseMoveEvent(Point(40, 100)))
     await asyncio.sleep(0.01)
 
     assert hook.remote_active is False

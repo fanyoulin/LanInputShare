@@ -12,6 +12,7 @@ from lan_input_share.elevated.models import ApprovedClient
 from lan_input_share.elevated.pipe_transport import NamedPipeServer, pipe_name_for
 from lan_input_share.elevated.server import ElevatedInputHelper
 from lan_input_share.input.win32_injector import Win32InputInjector
+from lan_input_share.windows.dpi import enable_per_monitor_v2
 from lan_input_share.windows.process_identity import (
     current_user_sid,
     inspect_process_identity,
@@ -50,6 +51,7 @@ def load_approved_client(path: Path) -> ApprovedClient:
 
 
 def helper_main(argv: Sequence[str] | None = None) -> int:
+    enable_per_monitor_v2()
     parser = argparse.ArgumentParser(prog="LanInputShareInputHelper")
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--smoke-test", action="store_true")

@@ -131,10 +131,10 @@ class CrossLayout:
 
 
 def _map_axis_position(source_size: int, target_size: int, coordinate: int) -> int:
-    clamped = min(max(coordinate, 0), source_size - 1)
-    if source_size == 1:
+    if source_size <= 1 or target_size <= 1:
         return 0
-    return round(clamped * (target_size - 1) / (source_size - 1))
+    source_coordinate = min(max(coordinate, 0), source_size - 1)
+    return round(source_coordinate * (target_size - 1) / (source_size - 1))
 
 
 def map_horizontal_edge_position(

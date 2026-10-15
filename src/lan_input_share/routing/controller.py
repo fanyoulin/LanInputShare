@@ -63,7 +63,7 @@ class RoutingController:
         devices: dict[str, DeviceInfo],
         layout: RoutingLayout,
         *,
-        hysteresis_pixels: int = 32,
+        hysteresis_pixels: int = 1,
     ) -> None:
         if local_device_id not in devices or local_device_id not in layout.device_ids:
             raise ValueError("本机必须存在于设备列表和屏幕布局中")
@@ -102,7 +102,11 @@ class RoutingController:
                     timestamp=event.timestamp,
                 )
                 actions = list(self.activate(neighbor))
-                self._blocked_edge = self._opposite(direction)
+                self._blocked_edge = (
+                    self._opposite(direction)
+                    if neighbor == self._local_device_id
+                    else None
+                )
                 if neighbor != self._local_device_id:
                     actions.append(SendRemote(neighbor, mapped))
                 else:
@@ -117,14 +121,7 @@ class RoutingController:
         if active_id == self._local_device_id:
             return (DeliverLocal(event),)
         if isinstance(event, MouseMoveEvent):
-            event = MouseMoveEvent(
-                Point(
-                    min(max(event.position.x, 0), active_screen.width - 1),
-                    min(max(event.position.y, 0), active_screen.height - 1),
-                ),
-                injected=event.injected,
-                timestamp=event.timestamp,
-            )
+            event = self._clamp_mouse(event, active_screen)
         self._pressed.apply(event)
         return (SendRemote(active_id, event),)
 
@@ -186,11 +183,22 @@ class RoutingController:
     def _edge_neighbor(
         self, event: MouseMoveEvent, device_id: str, width: int, height: int
     ) -> tuple[str | None, Direction | None]:
+        local = device_id == self._local_device_id
         candidates = (
-            (event.position.x <= 0, Direction.LEFT),
-            (event.position.x >= width - 1, Direction.RIGHT),
-            (event.position.y <= 0, Direction.UP),
-            (event.position.y >= height - 1, Direction.DOWN),
+            (event.position.x <= 0 if local else event.position.x < 0, Direction.LEFT),
+            (
+                event.position.x >= width - 1
+                if local
+                else event.position.x > width - 1,
+                Direction.RIGHT,
+            ),
+            (event.position.y <= 0 if local else event.position.y < 0, Direction.UP),
+            (
+                event.position.y >= height - 1
+                if local
+                else event.position.y > height - 1,
+                Direction.DOWN,
+            ),
         )
         for reached, direction in candidates:
             if reached and self._blocked_edge != direction:
@@ -213,6 +221,17 @@ class RoutingController:
         x = map_vertical_edge_position(source, target, event.position.x)
         y = 0 if direction == Direction.DOWN else target.height - 1
         return Point(x, y)
+
+    @staticmethod
+    def _clamp_mouse(event: MouseMoveEvent, screen: ScreenInfo) -> MouseMoveEvent:
+        return MouseMoveEvent(
+            Point(
+                min(max(event.position.x, 0), screen.width - 1),
+                min(max(event.position.y, 0), screen.height - 1),
+            ),
+            injected=event.injected,
+            timestamp=event.timestamp,
+        )
 
     @staticmethod
     def _opposite(direction: Direction) -> Direction:

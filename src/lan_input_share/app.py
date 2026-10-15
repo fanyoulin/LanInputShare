@@ -29,6 +29,7 @@ from lan_input_share.security.pairing import PairingRequest
 from lan_input_share.transfer.preflight import PasteDecision
 from lan_input_share.transfer.status import FileTransferStatus
 from lan_input_share.ui.close_behavior import CloseChoice, ClosePreference
+from lan_input_share.windows.dpi import enable_per_monitor_v2
 from lan_input_share.windows.input_helper_install import (
     INPUT_HELPER_EXE_NAME,
     InputHelperManager,
@@ -369,6 +370,7 @@ def diagnose() -> dict[str, object]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    enable_per_monitor_v2()
     parser = argparse.ArgumentParser(prog="LanInputShare")
     parser.add_argument("--diagnose", action="store_true", help="输出只读诊断并退出")
     parser.add_argument("--minimized", action="store_true", help="仅显示托盘图标")

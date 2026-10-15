@@ -5,6 +5,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 from lan_input_share.elevated.models import ApprovedClient, HelperState, HelperStatus
@@ -51,24 +52,39 @@ _ReleaseMarker = type[ReleaseAll]
 _QueueItem = InputEvent | _ReleaseMarker
 
 
+@dataclass(slots=True)
+class _MotionBurst:
+    first: MouseMoveEvent
+    latest: MouseMoveEvent | None = None
+
+
+_StoredItem = _QueueItem | _MotionBurst
+
+
 class _InputQueue:
     def __init__(self, capacity: int) -> None:
         if capacity <= 0:
             raise ValueError("助手输入队列容量必须大于零")
         self._capacity = capacity
-        self._items: deque[_QueueItem] = deque()
+        self._items: deque[_StoredItem] = deque()
         self._condition = threading.Condition()
 
     def put_event(self, event: InputEvent) -> None:
         with self._condition:
-            if isinstance(event, MouseMoveEvent) and self._replace_last_motion(event):
+            if isinstance(event, MouseMoveEvent):
+                if self._coalesce_motion(event):
+                    self._condition.notify()
+                    return
+                if len(self._items) >= self._capacity:
+                    return
+                self._items.append(_MotionBurst(event))
                 self._condition.notify()
                 return
-            if len(self._items) >= self._capacity:
-                if isinstance(event, MouseMoveEvent):
-                    return
-                if not self._discard_last_motion():
-                    raise HelperQueueFull("高权限输入助手队列已满")
+            if (
+                len(self._items) >= self._capacity
+                and not self._discard_last_motion()
+            ):
+                raise HelperQueueFull("高权限输入助手队列已满")
             self._items.append(event)
             self._condition.notify()
 
@@ -84,21 +100,26 @@ class _InputQueue:
                 self._condition.wait(timeout)
             if not self._items:
                 return None
-            return self._items.popleft()
+            item = self._items.popleft()
+            if isinstance(item, _MotionBurst):
+                if item.latest is not None and item.latest != item.first:
+                    self._items.appendleft(_MotionBurst(item.latest))
+                return item.first
+            return item
 
     def wake(self) -> None:
         with self._condition:
             self._condition.notify_all()
 
-    def _replace_last_motion(self, event: MouseMoveEvent) -> bool:
-        if self._items and isinstance(self._items[-1], MouseMoveEvent):
-            self._items[-1] = event
+    def _coalesce_motion(self, event: MouseMoveEvent) -> bool:
+        if self._items and isinstance(self._items[-1], _MotionBurst):
+            self._items[-1].latest = event
             return True
         return False
 
     def _discard_last_motion(self) -> bool:
         for index in range(len(self._items) - 1, -1, -1):
-            if isinstance(self._items[index], MouseMoveEvent):
+            if isinstance(self._items[index], _MotionBurst):
                 del self._items[index]
                 return True
         return False

@@ -41,7 +41,7 @@ def test_three_devices_route_left_to_middle_to_right_and_back() -> None:
     assert actions[-1] == SendRemote("right", MouseMoveEvent(Point(0, 720)))
 
     routing.handle_input(MouseMoveEvent(Point(100, 720)))
-    actions = routing.handle_input(MouseMoveEvent(Point(0, 720)))
+    actions = routing.handle_input(MouseMoveEvent(Point(-1, 720)))
     assert SwitchTarget("right", "desk") in actions
     assert RestoreLocalCursor(Point(1919, 540)) in actions
 
@@ -54,6 +54,64 @@ def test_edge_hysteresis_prevents_immediate_bounce() -> None:
 
     assert not any(isinstance(action, SwitchTarget) for action in actions)
     assert actions == (SendRemote("right", MouseMoveEvent(Point(0, 133))),)
+
+
+@pytest.mark.parametrize(
+    ("edge", "expected"),
+    [
+        (Point(0, 540), Point(1279, 360)),
+        (Point(1919, 540), Point(0, 720)),
+    ],
+)
+def test_remote_entry_preserves_the_shared_edge_percentage(
+    edge: Point, expected: Point
+) -> None:
+    routing = controller()
+
+    actions = routing.handle_input(edge_event := MouseMoveEvent(edge))
+
+    assert edge_event.position == edge
+    assert isinstance(actions[-1], SendRemote)
+    assert actions[-1].event == MouseMoveEvent(expected)
+
+
+def test_reversing_after_entry_returns_at_the_same_percentage_position() -> None:
+    routing = controller()
+
+    entry = routing.handle_input(MouseMoveEvent(Point(0, 540)))
+    assert entry[-1] == SendRemote("left", MouseMoveEvent(Point(1279, 360)))
+
+    returned = routing.handle_input(MouseMoveEvent(Point(1280, 360)))
+
+    assert SwitchTarget("left", "desk") in returned
+    assert RestoreLocalCursor(Point(0, 540)) in returned
+
+
+def test_entire_edge_crosses_by_percentage_to_a_shorter_screen() -> None:
+    routing = controller()
+
+    actions = routing.handle_input(MouseMoveEvent(Point(0, 900)))
+
+    assert actions[-1] == SendRemote("left", MouseMoveEvent(Point(1279, 600)))
+    assert routing.active_device_id == "left"
+
+
+def test_tiny_remote_screen_does_not_skip_on_perpendicular_motion() -> None:
+    devices = {
+        "desk": device("desk", DeviceRole.CONTROLLER, 1920, 1080),
+        "tiny": device("tiny", DeviceRole.CLIENT, 1, 1),
+        "right": device("right", DeviceRole.CLIENT, 1920, 1080),
+    }
+    routing = RoutingController(
+        "desk", devices, LinearLayout(("desk", "tiny", "right"))
+    )
+
+    entry = routing.handle_input(MouseMoveEvent(Point(1919, 0)))
+    motion = routing.handle_input(MouseMoveEvent(Point(0, 1)))
+
+    assert entry[-1] == SendRemote("tiny", MouseMoveEvent(Point(0, 0)))
+    assert motion == (SendRemote("tiny", MouseMoveEvent(Point(0, 0))),)
+    assert routing.active_device_id == "tiny"
 
 
 def test_remote_pointer_is_clamped_at_an_edge_without_a_neighbor() -> None:
@@ -100,7 +158,7 @@ def test_route_to_top_client_and_return_to_controller() -> None:
     assert actions[-1] == SendRemote("top", MouseMoveEvent(Point(1280, 1439)))
 
     routing.handle_input(MouseMoveEvent(Point(1280, 1300)))
-    actions = routing.handle_input(MouseMoveEvent(Point(1280, 1439)))
+    actions = routing.handle_input(MouseMoveEvent(Point(1280, 1440)))
     assert SwitchTarget("top", "desk") in actions
     assert RestoreLocalCursor(Point(960, 0)) in actions
 
