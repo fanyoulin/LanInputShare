@@ -13,7 +13,7 @@ from lan_input_share.elevated.client import (
     _InputQueue,
     reconnect_delays,
 )
-from lan_input_share.elevated.models import ApprovedClient, HelperState
+from lan_input_share.elevated.models import ApprovedClient, HelperState, HelperStatus
 from lan_input_share.elevated.protocol import (
     Hello,
     HelperFrameDecoder,
@@ -178,6 +178,101 @@ def test_disconnect_immediately_marks_bridge_unavailable() -> None:
 
     _wait_until(lambda: bridge.status.state is HelperState.UNAVAILABLE)
     bridge.stop()
+
+
+def test_bridge_detects_live_install_and_starts_helper_without_app_restart() -> None:
+    connection = FakeConnection()
+    pipe_client = FakePipeClient(connection)
+    probe_calls = 0
+    starts = 0
+
+    def installation_status() -> HelperStatus:
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            return HelperStatus(HelperState.NOT_INSTALLED, "not installed")
+        return HelperStatus(HelperState.RUNNING, "installed")
+
+    def ensure_started() -> None:
+        nonlocal starts
+        starts += 1
+
+    bridge = HelperInputBridge(
+        approved(),
+        pipe_client=pipe_client,
+        process_id=321,
+        heartbeat_interval=0.05,
+        initial_status=HelperStatus(HelperState.NOT_INSTALLED, "not installed"),
+        installation_status=installation_status,
+        ensure_started=ensure_started,
+    )
+    bridge.start()
+    assert connection.written.wait(2)
+    bridge.stop()
+
+    assert probe_calls >= 2
+    assert starts >= 1
+    assert pipe_client.connect_calls == 1
+
+
+def test_bridge_restarts_installed_helper_after_disconnect() -> None:
+    first = FakeConnection()
+    second = FakeConnection()
+
+    class SequencedPipeClient:
+        def __init__(self) -> None:
+            self.connections = iter((first, second))
+
+        def connect(self, timeout: float) -> FakeConnection:
+            del timeout
+            return next(self.connections)
+
+    starts = 0
+
+    def ensure_started() -> None:
+        nonlocal starts
+        starts += 1
+
+    bridge = HelperInputBridge(
+        approved(),
+        pipe_client=SequencedPipeClient(),
+        process_id=321,
+        heartbeat_interval=0.05,
+        installation_status=lambda: HelperStatus(HelperState.RUNNING, "installed"),
+        ensure_started=ensure_started,
+    )
+    bridge.start()
+    assert first.written.wait(1)
+    first.incoming.put(None)
+    assert second.written.wait(2)
+    bridge.stop()
+
+    assert starts >= 2
+
+
+def test_bridge_keeps_retrying_when_task_start_temporarily_fails() -> None:
+    connection = FakeConnection()
+    starts = 0
+
+    def ensure_started() -> None:
+        nonlocal starts
+        starts += 1
+        if starts == 1:
+            raise LookupError("task is being replaced")
+
+    bridge = HelperInputBridge(
+        approved(),
+        pipe_client=FakePipeClient(connection),
+        process_id=321,
+        heartbeat_interval=0.05,
+        installation_status=lambda: HelperStatus(HelperState.RUNNING, "installed"),
+        ensure_started=ensure_started,
+    )
+    bridge.start()
+    assert connection.written.wait(2)
+    bridge.stop()
+
+    assert starts >= 2
 
 
 def _written_messages(connection: FakeConnection) -> list[object]:

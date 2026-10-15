@@ -4,6 +4,7 @@ import asyncio
 import base64
 import ctypes
 import logging
+import os
 import shutil
 import ssl
 import sys
@@ -38,8 +39,12 @@ from lan_input_share.core.models import (
     ScreenPosition,
 )
 from lan_input_share.elevated.client import HelperInputBridge
-from lan_input_share.elevated.helper_main import load_approved_client
-from lan_input_share.elevated.models import HelperState, HelperStatus
+from lan_input_share.elevated.models import (
+    HELPER_PROTOCOL_VERSION,
+    ApprovedClient,
+    HelperState,
+    HelperStatus,
+)
 from lan_input_share.input.events import InputEvent, KeyEvent
 from lan_input_share.input.routed_injector import (
     RoutedInputInjector,
@@ -114,6 +119,7 @@ from lan_input_share.windows.input_helper_install import (
     INPUT_HELPER_EXE_NAME,
     InputHelperManager,
 )
+from lan_input_share.windows.process_identity import inspect_process_identity
 
 _LOGGER = logging.getLogger("lan_input_share.runtime")
 
@@ -2275,15 +2281,29 @@ def _create_default_helper_input() -> ManagedHelperInput:
     helper_source = executable.with_name(INPUT_HELPER_EXE_NAME)
     manager = InputHelperManager()
     status = manager.status(executable, helper_source)
-    if status.state is not HelperState.RUNNING:
-        return StaticHelperInput(HelperStatus(status.state, status.detail))
     try:
-        approved = load_approved_client(manager.manifest_path)
+        identity = inspect_process_identity(os.getpid())
+        approved = ApprovedClient(
+            path=identity.path,
+            sha256=identity.sha256,
+            user_sid=identity.user_sid,
+            protocol_version=HELPER_PROTOCOL_VERSION,
+        )
     except (OSError, ValueError) as exc:
         return StaticHelperInput(
-            HelperStatus(HelperState.REPAIR_REQUIRED, f"助手安装清单无效：{exc}")
+            HelperStatus(HelperState.UNAVAILABLE, f"无法识别主程序身份：{exc}")
         )
-    return HelperInputBridge(approved)
+
+    def installation_status() -> HelperStatus:
+        current = manager.status(executable, helper_source)
+        return HelperStatus(current.state, current.detail)
+
+    return HelperInputBridge(
+        approved,
+        initial_status=HelperStatus(status.state, status.detail),
+        installation_status=installation_status,
+        ensure_started=manager.start,
+    )
 
 
 def _capability_mode(state: HelperState) -> str:

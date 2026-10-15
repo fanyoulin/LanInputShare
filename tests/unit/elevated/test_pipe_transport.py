@@ -84,9 +84,32 @@ def test_pipe_name_rejects_invalid_session() -> None:
 def test_pipe_sddl_grants_only_user_and_system() -> None:
     sddl = pipe_sddl_for("S-1-5-21-1000")
 
-    assert sddl == "D:P(A;;GA;;;SY)(A;;GA;;;S-1-5-21-1000)"
+    assert sddl == "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;S-1-5-21-1000)"
     assert "WD" not in sddl
     assert "AU" not in sddl
+
+
+def test_server_rejects_remote_clients_and_requires_first_pipe_instance(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    calls: list[tuple[object, ...]] = []
+    expected_handle = object()
+    monkeypatch.setattr(
+        pipe_transport.win32pipe,
+        "CreateNamedPipe",
+        lambda *args: calls.append(args) or expected_handle,
+    )
+
+    handle = Win32PipeBackend().create_server(
+        "pipe",
+        pipe_sddl_for("S-1-5-21-1000"),
+    )
+
+    assert handle is expected_handle
+    open_mode = int(calls[0][1])
+    pipe_mode = int(calls[0][2])
+    assert pipe_mode & pipe_transport.win32pipe.PIPE_REJECT_REMOTE_CLIENTS
+    assert open_mode & pipe_transport._FILE_FLAG_FIRST_PIPE_INSTANCE
 
 
 def test_server_exposes_client_pid_before_any_read() -> None:

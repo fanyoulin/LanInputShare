@@ -425,11 +425,26 @@ def _run_input_helper_maintenance(arguments: argparse.Namespace) -> int:
         print("安装或移除高权限输入助手需要管理员权限", file=sys.stderr)
         return 2
     if arguments.install_input_helper:
-        manager.install(main_exe, helper_source)
-        manager.start()
+        try:
+            manager.install(main_exe, helper_source)
+            manager.start()
+        except Exception as exc:
+            _show_helper_maintenance_error("增强控制安装失败", exc)
+            return 1
     else:
-        manager.remove()
+        try:
+            manager.remove()
+        except Exception as exc:
+            _show_helper_maintenance_error("增强控制移除失败", exc)
+            return 1
     return 0
+
+
+def _show_helper_maintenance_error(title: str, error: Exception) -> None:
+    message = f"{title}，请返回主程序后重试。\n\n{error}"
+    print(message, file=sys.stderr)
+    if getattr(sys, "frozen", False):
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
 
 
 def _run_gui_smoke_test() -> int:

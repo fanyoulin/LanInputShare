@@ -7,10 +7,7 @@ from typing import Any
 import pytest
 
 from lan_input_share.elevated.models import HELPER_PROTOCOL_VERSION, HelperState
-from lan_input_share.windows.input_helper_install import (
-    INPUT_HELPER_TASK_NAME,
-    InputHelperManager,
-)
+from lan_input_share.windows.input_helper_install import InputHelperManager
 
 
 class RecordingRunner:
@@ -34,6 +31,7 @@ def manager(
     tmp_path: Path,
     runner: RecordingRunner,
     stopped_paths: list[Path] | None = None,
+    stage_helper: Any = None,
 ) -> InputHelperManager:
     return InputHelperManager(
         program_files=tmp_path / "Program Files",
@@ -42,6 +40,7 @@ def manager(
         command_runner=runner,
         protect_file=lambda _path, _sid: None,
         stop_processes=(stopped_paths.append if stopped_paths is not None else None),
+        stage_helper=stage_helper,
     )
 
 
@@ -66,11 +65,16 @@ def test_install_writes_atomic_artifacts_and_highest_interactive_task(
     assert manifest["helper_sha256"] == _sha256(helper_source)
     assert manifest["helper_protocol_version"] == HELPER_PROTOCOL_VERSION
     create_args, options = runner.calls[-1]
-    assert create_args[:4] == ["schtasks.exe", "/Create", "/TN", INPUT_HELPER_TASK_NAME]
+    assert create_args[:4] == ["schtasks.exe", "/Create", "/TN", subject.task_name]
     assert "/XML" in create_args
     assert "<UserId>S-1-5-21-1001</UserId>" in runner.task_xml
     assert "<LogonType>InteractiveToken</LogonType>" in runner.task_xml
     assert "<RunLevel>HighestAvailable</RunLevel>" in runner.task_xml
+    assert "<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>" in runner.task_xml
+    assert "<RestartOnFailure>" in runner.task_xml
+    assert runner.task_xml.index("<Count>3</Count>") < runner.task_xml.index(
+        "<Interval>PT1M</Interval>"
+    )
     assert str(subject.installed_helper) in runner.task_xml
     assert str(subject.manifest_path) in runner.task_xml
     assert not list(subject.install_dir.glob(".input-helper-task.*.xml"))
@@ -162,7 +166,7 @@ def test_install_stops_orphaned_helper_before_replacing_files(tmp_path: Path) ->
         "schtasks.exe",
         "/End",
         "/TN",
-        INPUT_HELPER_TASK_NAME,
+        subject.task_name,
     ]
     assert runner.calls[0][1]["check"] is False
 
@@ -178,11 +182,36 @@ def test_remove_stops_orphaned_helper_before_deleting_files(tmp_path: Path) -> N
 
     assert stopped_paths == [subject.installed_helper]
     assert [call[0] for call in runner.calls] == [
-        ["schtasks.exe", "/End", "/TN", INPUT_HELPER_TASK_NAME],
-        ["schtasks.exe", "/Delete", "/TN", INPUT_HELPER_TASK_NAME, "/F"],
+        ["schtasks.exe", "/End", "/TN", subject.task_name],
+        ["schtasks.exe", "/Delete", "/TN", subject.task_name, "/F"],
     ]
     assert not subject.installed_helper.exists()
     assert not subject.manifest_path.exists()
+
+
+def test_install_is_namespaced_per_windows_user(tmp_path: Path) -> None:
+    subject = manager(tmp_path, RecordingRunner())
+
+    assert subject.install_dir.name == "S-1-5-21-1001"
+    assert "S-1-5-21-1001" in subject.task_name
+
+
+def test_manifest_hash_is_computed_from_exclusive_staged_bytes(tmp_path: Path) -> None:
+    main_exe = tmp_path / "release" / "LanInputShare.exe"
+    helper_source = tmp_path / "release" / "LanInputShareInputHelper.exe"
+    _write(main_exe, b"main")
+    _write(helper_source, b"source-before-race")
+
+    def stage(_source: Path, target: Path) -> str:
+        target.write_bytes(b"bytes-actually-copied")
+        return _sha256(target)
+
+    subject = manager(tmp_path, RecordingRunner(), stage_helper=stage)
+    subject.install(main_exe, helper_source)
+    manifest = json.loads(subject.manifest_path.read_text(encoding="utf-8"))
+
+    assert subject.installed_helper.read_bytes() == b"bytes-actually-copied"
+    assert manifest["helper_sha256"] == _sha256(subject.installed_helper)
 
 
 def test_tampered_source_inside_install_directory_is_rejected(tmp_path: Path) -> None:

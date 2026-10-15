@@ -69,6 +69,28 @@ def test_remove_helper_requires_elevation_and_dispatches(monkeypatch) -> None:  
     assert FakeManager.removes == 1
 
 
+def test_install_helper_reports_failure_without_unhandled_exception(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    messages: list[tuple[str, str]] = []
+
+    class FailingManager(FakeManager):
+        def install(self, main_exe: Path, helper_source: Path) -> None:
+            del main_exe, helper_source
+            raise RuntimeError("task XML rejected")
+
+    monkeypatch.setattr(app, "is_elevated", lambda: True)
+    monkeypatch.setattr(app, "InputHelperManager", FailingManager)
+    monkeypatch.setattr(
+        app,
+        "_show_helper_maintenance_error",
+        lambda title, error: messages.append((title, str(error))),
+    )
+
+    assert app.main(["--install-input-helper"]) == 1
+    assert messages == [("增强控制安装失败", "task XML rejected")]
+
+
 def test_helper_status_is_read_only_and_does_not_require_elevation(
     monkeypatch,
     capsys,

@@ -17,6 +17,7 @@ from lan_input_share.elevated.protocol import MAX_HELPER_FRAME_BYTES
 _PIPE_PREFIX = r"\\.\pipe\LanInputShare.Input"
 _SID_PATTERN = re.compile(r"^S-(?:\d+-)+\d+$", re.IGNORECASE)
 _CLOSED_ERRORS = {6, 109, 232, 233, 995}
+_FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
 
 
 class PipeClosedError(ConnectionError):
@@ -52,7 +53,7 @@ def pipe_name_for(user_sid: str, session_id: int) -> str:
 
 def pipe_sddl_for(user_sid: str) -> str:
     sid = _normalized_sid(user_sid)
-    return f"D:P(A;;GA;;;SY)(A;;GA;;;{sid})"
+    return f"D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;{sid})"
 
 
 class PipeConnection:
@@ -170,8 +171,12 @@ class Win32PipeBackend:
         )
         return win32pipe.CreateNamedPipe(
             name,
-            win32pipe.PIPE_ACCESS_DUPLEX,
-            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            win32pipe.PIPE_ACCESS_DUPLEX
+            | _FILE_FLAG_FIRST_PIPE_INSTANCE,
+            win32pipe.PIPE_TYPE_BYTE
+            | win32pipe.PIPE_READMODE_BYTE
+            | win32pipe.PIPE_WAIT
+            | win32pipe.PIPE_REJECT_REMOTE_CLIENTS,
             win32pipe.PIPE_UNLIMITED_INSTANCES,
             MAX_HELPER_FRAME_BYTES + 4,
             MAX_HELPER_FRAME_BYTES + 4,

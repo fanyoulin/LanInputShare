@@ -101,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 - `logs\`：运行日志；
 - `staging\`：跨设备文件传输暂存区。
 
-卸载时先在客户端“增强控制”一栏选择移除，再从托盘退出程序并删除发行目录。增强助手安装在 `%ProgramFiles%\LanInputShare`，由受保护清单绑定主程序路径、SHA-256、当前 Windows 用户和协议版本。若需要完全重置配对关系，可在确认不再需要原身份后删除 `%LOCALAPPDATA%\LanInputShare`；此操作会同时清除配置、身份、信任和暂存文件。
+卸载时先在客户端“增强控制”一栏选择移除，再从托盘退出程序并删除发行目录。增强助手按当前 Windows 用户安装在 `%ProgramFiles%\LanInputShare\<用户 SID>`，由受保护清单绑定主程序路径、SHA-256、当前 Windows 用户和协议版本。若需要完全重置配对关系，可在确认不再需要原身份后删除 `%LOCALAPPDATA%\LanInputShare`；此操作会同时清除配置、身份、信任和暂存文件。
 
 ## 安全说明
 

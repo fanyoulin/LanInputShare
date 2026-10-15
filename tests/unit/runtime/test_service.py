@@ -10,7 +10,7 @@ import lan_input_share.runtime.service as service_module
 from lan_input_share.config.models import AppConfig, PeerTarget
 from lan_input_share.config.paths import AppPaths
 from lan_input_share.core.models import DeviceRole, ScreenPosition
-from lan_input_share.elevated.models import HelperState, HelperStatus
+from lan_input_share.elevated.models import ClientIdentity, HelperState, HelperStatus
 from lan_input_share.protocol.messages import InputCapabilityMessage
 from lan_input_share.runtime.service import NetworkRoleService
 
@@ -144,3 +144,56 @@ async def test_client_sends_input_capability_only_on_state_change(tmp_path: Path
         "elevated",
         "secure_desktop",
     ]
+
+
+def test_default_helper_bridge_can_observe_install_without_app_restart(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    starts: list[bool] = []
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    class Manager:
+        def status(self, main_exe: Path, helper_source: Path) -> SimpleNamespace:
+            del main_exe, helper_source
+            return SimpleNamespace(
+                state=HelperState.NOT_INSTALLED,
+                detail="not installed",
+            )
+
+        def start(self) -> None:
+            starts.append(True)
+
+    def bridge(approved: object, **kwargs: object) -> object:
+        captured["approved"] = approved
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(service_module, "InputHelperManager", Manager)
+    monkeypatch.setattr(
+        service_module,
+        "inspect_process_identity",
+        lambda _pid: ClientIdentity(
+            123,
+            tmp_path / "LanInputShare.exe",
+            "A" * 64,
+            "S-1-5-21-1001",
+            1,
+        ),
+    )
+    monkeypatch.setattr(service_module, "HelperInputBridge", bridge)
+
+    result = service_module._create_default_helper_input()
+
+    assert result is sentinel
+    initial = captured["initial_status"]
+    assert isinstance(initial, HelperStatus)
+    assert initial.state is HelperState.NOT_INSTALLED
+    probe = captured["installation_status"]
+    ensure_started = captured["ensure_started"]
+    assert callable(probe)
+    assert callable(ensure_started)
+    assert probe().state is HelperState.NOT_INSTALLED
+    ensure_started()
+    assert starts == [True]

@@ -121,6 +121,9 @@ class HelperInputBridge:
         pipe_client: BridgePipeClient | None = None,
         process_id: int | None = None,
         connect_timeout: float = 0.5,
+        initial_status: HelperStatus | None = None,
+        installation_status: Callable[[], HelperStatus] | None = None,
+        ensure_started: Callable[[], None] | None = None,
     ) -> None:
         if heartbeat_interval <= 0:
             raise ValueError("助手心跳间隔必须大于零")
@@ -135,8 +138,13 @@ class HelperInputBridge:
         self._process_id = pid
         self._heartbeat_interval = heartbeat_interval
         self._connect_timeout = connect_timeout
+        self._installation_status = installation_status
+        self._ensure_started = ensure_started
         self._queue = _InputQueue(capacity)
-        self._status = HelperStatus(HelperState.UNAVAILABLE, "高权限输入助手未连接")
+        self._status = initial_status or HelperStatus(
+            HelperState.UNAVAILABLE,
+            "高权限输入助手未连接",
+        )
         self._status_lock = threading.Lock()
         self._callbacks: list[Callable[[HelperStatus], None]] = []
         self._stopped = threading.Event()
@@ -194,6 +202,15 @@ class HelperInputBridge:
         delays = reconnect_delays()
         while not self._stopped.is_set():
             try:
+                if self._installation_status is not None:
+                    installation = self._installation_status()
+                    if installation.state is not HelperState.RUNNING:
+                        self._set_status(installation.state, installation.detail)
+                        if not self._stopped.is_set():
+                            self._stopped.wait(next(delays))
+                        continue
+                if self._ensure_started is not None:
+                    self._ensure_started()
                 connection = self._pipe_client.connect(self._connect_timeout)
                 with self._connection_lock:
                     self._connection = connection
@@ -205,7 +222,7 @@ class HelperInputBridge:
                         HelperState.UNAVAILABLE,
                         "高权限输入助手连接已断开，正在重连",
                     )
-            except (ConnectionError, OSError, RuntimeError, HelperProtocolError) as exc:
+            except Exception as exc:
                 self._set_status(HelperState.UNAVAILABLE, f"高权限输入助手不可用：{exc}")
             finally:
                 with self._connection_lock:
