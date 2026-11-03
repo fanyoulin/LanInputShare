@@ -106,17 +106,20 @@ class _NativeClipboardBackend:
         return str(value)
 
     def read_image(self) -> ClipboardImage | None:
-        for format_id, name in (
-            (_CF_DIBV5, "dibv5"),
-            (win32con.CF_DIB, "dib"),
-        ):
-            if not win32clipboard.IsClipboardFormatAvailable(format_id):
+        # EnumClipboardFormats lists a native format before formats synthesized
+        # by Windows. Preserve that choice so our own CF_DIB writes read back
+        # byte-for-byte with the loop marker's digest.
+        format_id = 0
+        while format_id := win32clipboard.EnumClipboardFormats(format_id):
+            if format_id not in (_CF_DIBV5, win32con.CF_DIB):
                 continue
             value = win32clipboard.GetClipboardData(format_id)
             if isinstance(value, (bytes, bytearray, memoryview)):
                 data = bytes(value)
                 if data:
-                    return ClipboardImage(name, data)
+                    name = "dibv5" if format_id == _CF_DIBV5 else "dib"
+                    normalized = _normalize_opaque_32_bit_dib(data, format_id)
+                    return normalized or ClipboardImage(name, data)
         return None
 
     def write_image(self, image: ClipboardImage, marker: str) -> None:
@@ -168,6 +171,65 @@ class _NativeClipboardBackend:
         finally:
             if not windows_owns_handle:
                 self._kernel32.GlobalFree(handle)
+
+
+def _normalize_opaque_32_bit_dib(data: bytes, format_id: int) -> ClipboardImage | None:
+    header_size = 124 if format_id == _CF_DIBV5 else 40
+    if len(data) < header_size:
+        return None
+    size, width, height, planes, bit_count, compression, image_size = struct.unpack_from(
+        "<IiiHHII", data
+    )
+    if (
+        size != header_size
+        or width <= 0
+        or height == 0
+        or planes != 1
+        or bit_count != 32
+        or compression not in (0, 3)
+    ):
+        return None
+
+    allowed_offsets: tuple[int, ...]
+    if format_id == _CF_DIBV5:
+        alpha_mask = struct.unpack_from("<I", data, 52)[0]
+        profile_offset, profile_size = struct.unpack_from("<II", data, 112)
+        if alpha_mask or profile_offset or profile_size:
+            return None
+        if compression == 3:
+            masks = struct.unpack_from("<III", data, 40)
+            if masks != (0x00FF0000, 0x0000FF00, 0x000000FF):
+                return None
+            allowed_offsets = (124, 136)
+        else:
+            allowed_offsets = (124,)
+    elif compression == 3:
+        if len(data) < 52:
+            return None
+        masks = struct.unpack_from("<III", data, 40)
+        if masks != (0x00FF0000, 0x0000FF00, 0x000000FF):
+            return None
+        allowed_offsets = (52,)
+    else:
+        allowed_offsets = (40,)
+
+    row_count = abs(height)
+    source_size = width * row_count * 4
+    source_offset = len(data) - source_size
+    if image_size not in (0, source_size) or source_offset not in allowed_offsets:
+        return None
+
+    row_stride = ((width * 3 + 3) // 4) * 4
+    result = bytearray(40 + row_stride * row_count)
+    struct.pack_into("<IiiHHII", result, 0, 40, width, height, 1, 24, 0, row_stride * row_count)
+    for row in range(row_count):
+        source = source_offset + row * width * 4
+        target = 40 + row * row_stride
+        row_end = target + width * 3
+        result[target:row_end:3] = data[source : source + width * 4 : 4]
+        result[target + 1 : row_end : 3] = data[source + 1 : source + width * 4 : 4]
+        result[target + 2 : row_end : 3] = data[source + 2 : source + width * 4 : 4]
+    return ClipboardImage("dib", bytes(result))
 
 
 class Win32ClipboardWatcher:
